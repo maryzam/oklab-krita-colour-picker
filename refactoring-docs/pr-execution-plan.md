@@ -9,6 +9,8 @@ the rewrite. Keep PRs ordered and merge each one before starting the next.
 - Use one branch per rewrite slice.
 - Add or update tests before implementation.
 - Keep `legacy-plugin/` untracked and readonly.
+- Install dev/test dependencies from `requirements-dev.txt` before running
+  pytest-backed checks.
 - Run `python3 scripts/checks/dev_checks.py --scope staged` before commit.
 - Run `python3 scripts/checks/dev_checks.py --scope tracked --pytest` before
   push.
