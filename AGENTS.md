@@ -1,7 +1,8 @@
 # Agent Development Rules
 
-Follow the rewrite plan in `refactoring-docs/rewrite-plan.md`. Keep PRs small
-and ordered by rewrite slice.
+Follow the rewrite plan in `refactoring-docs/rewrite-plan.md` and the PR
+sequence in `refactoring-docs/pr-execution-plan.md`. Keep PRs small and
+ordered by rewrite slice.
 
 ## Hard Rules
 

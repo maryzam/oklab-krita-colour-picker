@@ -28,7 +28,10 @@ Build the rewrite version under `lab_colour_picker/` from empty.
 
 Both plugins remain installable simultaneously throughout the rewrite, which enables side-by-side exploratory testing in real Krita: same foreground colour, two pickers, immediate visual comparison of latency, gamut handling,indicator placement, and feel.
 
-Once the rewrite reaches the Definition of Done and an acceptance pass, the legacy plugin and refactoring docs will be deleted by human.
+Once the rewrite reaches the Definition of Done and an acceptance pass, the
+tracked refactoring docs and any rewrite-only tracked scaffolding will be
+deleted by human. `legacy-plugin/` remains an ignored local reference folder
+and is not part of repository cleanup.
 
 ## Rationale
 
@@ -360,11 +363,10 @@ criterion for iteration 3, not iteration 7.
 
 ### 0. Quarantine the legacy plugin
 
-Move the existing `lab_colour_picker/` to `legacy/lab_colour_picker/` and
-rename its dock factory id and window title to make the legacy version
-distinguishable inside Krita. Update `lab_colour_picker.desktop` accordingly,
-or add a second desktop file for the legacy variant. From this point on the
-legacy code is frozen — no edits except install-path adjustments.
+Keep the existing legacy implementation under ignored `legacy-plugin/` as a
+local readonly reference. If side-by-side Krita testing requires local legacy
+packaging edits, make them outside Git. From this point on the legacy code is
+frozen and untracked.
 
 Exit criteria:
 
@@ -527,8 +529,8 @@ Implementation:
 - Wire `plugin.py`, dock widget, controller, and widgets.
 - Hook `resizeEvent` on selector surfaces; rebuild geometry caches lazily on
   size change.
-- The legacy plugin remains in `legacy/` until iteration 7 acceptance, then
-  is removed in a single commit.
+- The legacy plugin remains available from ignored `legacy-plugin/` for local
+  side-by-side testing through iteration 7 acceptance.
 
 Exit criteria:
 
@@ -552,13 +554,16 @@ and compare directly. Manual checks:
   foreground colours.
 - Resizing the dock keeps the picker readable and indicator-accurate at a
   range of sizes.
-- After acceptance, delete `legacy/` in a single commit.
+- After acceptance, delete tracked rewrite-only planning artifacts in a single
+  commit if the human approves. Do not attempt to delete ignored
+  `legacy-plugin/` from Git.
 
 ## Migration Policy
 
 Do not port existing classes one-for-one. The legacy code lives behaviourally
-unchanged in `legacy/` until iteration 7 acceptance, aside from the packaging
-edits needed for side-by-side loading. From the legacy code, reuse only:
+unchanged in ignored `legacy-plugin/` until iteration 7 acceptance, aside from
+local packaging edits needed for side-by-side loading. From the legacy code,
+reuse only:
 
 - The product concept.
 - The three selector modes.
@@ -596,4 +601,5 @@ Do not carry forward:
 - Plugin performs no work while the dock is hidden.
 - The plugin remains responsive during drag and slider operations inside
   Krita, and observably faster than the legacy plugin in side-by-side use.
-- `legacy/` directory is removed in the same commit that closes acceptance.
+- Tracked rewrite-only planning artifacts are removed in the same commit that
+  closes acceptance, if the human approves that cleanup.
