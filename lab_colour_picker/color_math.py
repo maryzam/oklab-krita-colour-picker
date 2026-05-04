@@ -10,20 +10,6 @@ import numpy as np
 SRGB_GAMMA_THRESHOLD = 0.04045
 LINEAR_SRGB_GAMMA_THRESHOLD = 0.0031308
 
-_OKLAB_TO_LMS = np.array(
-    [
-        [1.0, 0.3963377774, 0.2158037573],
-        [1.0, -0.1055613458, -0.0638541728],
-        [1.0, -0.0894841775, -1.2914855480],
-    ]
-)
-_LMS3_TO_LINEAR_SRGB = np.array(
-    [
-        [4.0767416621, -3.3077115913, 0.2309699292],
-        [-1.2684380046, 2.6097574011, -0.3413193965],
-        [-0.0041960863, -0.7034186147, 1.7076147010],
-    ]
-)
 _LINEAR_SRGB_TO_LMS = np.array(
     [
         [0.4122214708, 0.5363325363, 0.0514459929],
@@ -36,6 +22,50 @@ _LMS_TO_OKLAB = np.array(
         [0.2104542553, 0.7936177850, -0.0040720468],
         [1.9779984951, -2.4285922050, 0.4505937099],
         [0.0259040371, 0.7827717662, -0.8086757660],
+    ]
+)
+_OKLAB_TO_LMS = np.linalg.inv(_LMS_TO_OKLAB)
+_LMS3_TO_LINEAR_SRGB = np.linalg.inv(_LINEAR_SRGB_TO_LMS)
+
+_MAX_SATURATION_COEFFICIENTS = np.array(
+    [
+        [
+            1.19086277,
+            1.76576728,
+            0.59662641,
+            0.75515197,
+            0.56771245,
+            4.0767416621,
+            -3.3077115913,
+            0.2309699292,
+        ],
+        [
+            0.73956515,
+            -0.45954404,
+            0.08285427,
+            0.12541070,
+            0.14503204,
+            -1.2684380046,
+            2.6097574011,
+            -0.3413193965,
+        ],
+        [
+            1.35733652,
+            -0.00915799,
+            -1.15130210,
+            -0.50559606,
+            0.00692167,
+            -0.0041960863,
+            -0.7034186147,
+            1.7076147010,
+        ],
+    ]
+)
+_OKLAB_TO_LMS_REFERENCE = np.array(
+    [
+        [1.0, 0.3963377774, 0.2158037573],
+        [1.0, -0.1055613458, -0.0638541728],
+        [1.0, -0.0894841775, -1.2914855480],
     ]
 )
 
@@ -52,7 +82,7 @@ def srgb_to_linear(srgb):
 
 
 def linear_to_srgb(linear):
-    """Convert linear sRGB component values to gamma-encoded sRGB."""
+    """Convert linear sRGB component values to unclipped gamma-encoded sRGB."""
 
     linear = np.asarray(linear, dtype=float)
     return np.where(
@@ -70,7 +100,7 @@ def srgb_to_oklab(srgb):
 
 
 def oklab_to_srgb(oklab):
-    """Convert OKLab triples to gamma-encoded sRGB triples."""
+    """Convert OKLab triples to unclipped gamma-encoded sRGB triples."""
 
     linear = oklab_to_linear_srgb(oklab)
     return linear_to_srgb(linear)
@@ -118,7 +148,7 @@ def in_srgb_gamut(srgb, *, epsilon=0.0):
     """Return whether gamma-encoded sRGB values are inside the display gamut."""
 
     srgb = np.asarray(srgb, dtype=float)
-    return np.all((srgb >= -epsilon) & (srgb <= 1.0 + epsilon), axis=-1)
+    return _bool_if_scalar(np.all((srgb >= -epsilon) & (srgb <= 1.0 + epsilon), axis=-1))
 
 
 def clip_srgb(srgb):
@@ -136,38 +166,31 @@ def compute_max_saturation(a_, b_):
     )
     red = -1.88170328 * a_ - 0.80936493 * b_ > 1.0
     green = (1.81444104 * a_ - 1.19445276 * b_ > 1.0) & ~red
-
-    k0 = np.where(red, 1.19086277, np.where(green, 0.73956515, 1.35733652))
-    k1 = np.where(red, 1.76576728, np.where(green, -0.45954404, -0.00915799))
-    k2 = np.where(red, 0.59662641, np.where(green, 0.08285427, -1.15130210))
-    k3 = np.where(red, 0.75515197, np.where(green, 0.12541070, -0.50559606))
-    k4 = np.where(red, 0.56771245, np.where(green, 0.14503204, 0.00692167))
-    wl = np.where(red, 4.0767416621, np.where(green, -1.2684380046, -0.0041960863))
-    wm = np.where(red, -3.3077115913, np.where(green, 2.6097574011, -0.7034186147))
-    ws = np.where(red, 0.2309699292, np.where(green, -0.3413193965, 1.7076147010))
+    region = np.where(red, 0, np.where(green, 1, 2))
+    coeffs = _MAX_SATURATION_COEFFICIENTS[region]
+    k0, k1, k2, k3, k4, wl, wm, ws = np.moveaxis(coeffs, -1, 0)
 
     saturation = k0 + k1 * a_ + k2 * b_ + k3 * a_ * a_ + k4 * a_ * b_
-    k_l = 0.3963377774 * a_ + 0.2158037573 * b_
-    k_m = -0.1055613458 * a_ - 0.0638541728 * b_
-    k_s = -0.0894841775 * a_ - 1.2914855480 * b_
+    k_l, k_m, k_s = _oklab_hue_to_lms_coefficients(a_, b_)
 
-    l_ = 1.0 + saturation * k_l
-    m_ = 1.0 + saturation * k_m
-    s_ = 1.0 + saturation * k_s
-    l = l_ * l_ * l_
-    m = m_ * m_ * m_
-    s = s_ * s_ * s_
-    l_d_s = 3.0 * k_l * l_ * l_
-    m_d_s = 3.0 * k_m * m_ * m_
-    s_d_s = 3.0 * k_s * s_ * s_
-    l_d_s2 = 6.0 * k_l * k_l * l_
-    m_d_s2 = 6.0 * k_m * k_m * m_
-    s_d_s2 = 6.0 * k_s * k_s * s_
+    for _ in range(3):
+        l_ = 1.0 + saturation * k_l
+        m_ = 1.0 + saturation * k_m
+        s_ = 1.0 + saturation * k_s
+        l = l_ * l_ * l_
+        m = m_ * m_ * m_
+        s = s_ * s_ * s_
+        l_d_s = 3.0 * k_l * l_ * l_
+        m_d_s = 3.0 * k_m * m_ * m_
+        s_d_s = 3.0 * k_s * s_ * s_
+        l_d_s2 = 6.0 * k_l * k_l * l_
+        m_d_s2 = 6.0 * k_m * k_m * m_
+        s_d_s2 = 6.0 * k_s * k_s * s_
 
-    f = wl * l + wm * m + ws * s
-    f1 = wl * l_d_s + wm * m_d_s + ws * s_d_s
-    f2 = wl * l_d_s2 + wm * m_d_s2 + ws * s_d_s2
-    saturation = saturation - f * f1 / (f1 * f1 - 0.5 * f * f2)
+        f = wl * l + wm * m + ws * s
+        f1 = wl * l_d_s + wm * m_d_s + ws * s_d_s
+        f2 = wl * l_d_s2 + wm * m_d_s2 + ws * s_d_s2
+        saturation = saturation - f * f1 / (f1 * f1 - 0.5 * f * f2)
     return _scalar_if_scalar(saturation)
 
 
@@ -187,7 +210,11 @@ def find_cusp(a_, b_):
 
 
 def find_gamut_intersection(a_, b_, l1, c1, l0, cusp=None):
-    """Find the first sRGB gamut intersection on an OKLab lightness/chroma ray."""
+    """Find the first sRGB gamut intersection on an OKLab lightness/chroma ray.
+
+    ``c1`` must be greater than zero. A zero-chroma ray has no chroma boundary
+    to intersect.
+    """
 
     a_, b_, l1, c1, l0 = np.broadcast_arrays(
         np.asarray(a_, dtype=float),
@@ -196,6 +223,9 @@ def find_gamut_intersection(a_, b_, l1, c1, l0, cusp=None):
         np.asarray(c1, dtype=float),
         np.asarray(l0, dtype=float),
     )
+    if np.any(c1 <= 0.0):
+        raise ValueError("c1 must be greater than zero")
+
     if cusp is None:
         l_cusp, c_cusp = find_cusp(a_, b_)
     else:
@@ -222,7 +252,8 @@ def max_chroma_for_lh(lightness, hue):
     )
     a_ = np.cos(hue)
     b_ = np.sin(hue)
-    chroma = find_gamut_intersection(a_, b_, lightness, np.ones_like(lightness), lightness)
+    cusp = find_cusp(a_, b_)
+    chroma = find_gamut_intersection(a_, b_, lightness, np.ones_like(lightness), lightness, cusp=cusp)
     chroma = np.where((lightness <= 0.0) | (lightness >= 1.0), 0.0, chroma)
     return _scalar_if_scalar(chroma)
 
@@ -230,56 +261,58 @@ def max_chroma_for_lh(lightness, hue):
 def _refine_upper_intersection_t(a_, b_, l1, c1, l0, t):
     d_l = l1 - l0
     d_c = c1
-    k_l = 0.3963377774 * a_ + 0.2158037573 * b_
-    k_m = -0.1055613458 * a_ - 0.0638541728 * b_
-    k_s = -0.0894841775 * a_ - 1.2914855480 * b_
+    k_l, k_m, k_s = _oklab_hue_to_lms_coefficients(a_, b_)
 
-    l = l0 * (1.0 - t) + t * l1
-    c = t * c1
-    l_ = l + c * k_l
-    m_ = l + c * k_m
-    s_ = l + c * k_s
     l_dt = d_l + d_c * k_l
     m_dt = d_l + d_c * k_m
     s_dt = d_l + d_c * k_s
 
-    t_r = _halley_channel_t(
-        4.0767416621,
-        -3.3077115913,
-        0.2309699292,
-        l_,
-        m_,
-        s_,
-        l_dt,
-        m_dt,
-        s_dt,
-    )
-    t_g = _halley_channel_t(
-        -1.2684380046,
-        2.6097574011,
-        -0.3413193965,
-        l_,
-        m_,
-        s_,
-        l_dt,
-        m_dt,
-        s_dt,
-    )
-    t_b = _halley_channel_t(
-        -0.0041960863,
-        -0.7034186147,
-        1.7076147010,
-        l_,
-        m_,
-        s_,
-        l_dt,
-        m_dt,
-        s_dt,
-    )
-    corrections = np.stack((t_r, t_g, t_b), axis=0)
-    nearest_index = np.argmin(np.abs(corrections), axis=0)
-    nearest = np.take_along_axis(corrections, nearest_index[None, ...], axis=0)[0]
-    return t + nearest
+    for _ in range(3):
+        l = l0 * (1.0 - t) + t * l1
+        c = t * c1
+        l_ = l + c * k_l
+        m_ = l + c * k_m
+        s_ = l + c * k_s
+
+        r, t_r = _halley_channel_t(
+            4.0767416621,
+            -3.3077115913,
+            0.2309699292,
+            l_,
+            m_,
+            s_,
+            l_dt,
+            m_dt,
+            s_dt,
+        )
+        g, t_g = _halley_channel_t(
+            -1.2684380046,
+            2.6097574011,
+            -0.3413193965,
+            l_,
+            m_,
+            s_,
+            l_dt,
+            m_dt,
+            s_dt,
+        )
+        b, t_b = _halley_channel_t(
+            -0.0041960863,
+            -0.7034186147,
+            1.7076147010,
+            l_,
+            m_,
+            s_,
+            l_dt,
+            m_dt,
+            s_dt,
+        )
+        active_channel = np.argmax(np.stack((r, g, b), axis=0), axis=0)
+        corrections = np.stack((t_r, t_g, t_b), axis=0)
+        correction = np.take_along_axis(corrections, active_channel[None, ...], axis=0)[0]
+        t = t + correction
+
+    return t
 
 
 def _halley_channel_t(wl, wm, ws, l_, m_, s_, l_dt, m_dt, s_dt):
@@ -297,7 +330,7 @@ def _halley_channel_t(wl, wm, ws, l_, m_, s_, l_dt, m_dt, s_dt):
     with np.errstate(divide="ignore", invalid="ignore"):
         u_channel = (1.0 - channel) / channel_dt
         correction = u_channel / (1.0 + 0.5 * channel_dt2 * u_channel / channel_dt)
-    return correction
+    return channel, correction
 
 
 def _scalar_if_scalar(value):
@@ -305,3 +338,18 @@ def _scalar_if_scalar(value):
     if value.shape == ():
         return float(value)
     return value
+
+
+def _bool_if_scalar(value):
+    value = np.asarray(value)
+    if value.shape == ():
+        return bool(value)
+    return value
+
+
+def _oklab_hue_to_lms_coefficients(a_, b_):
+    return (
+        _OKLAB_TO_LMS_REFERENCE[0, 1] * a_ + _OKLAB_TO_LMS_REFERENCE[0, 2] * b_,
+        _OKLAB_TO_LMS_REFERENCE[1, 1] * a_ + _OKLAB_TO_LMS_REFERENCE[1, 2] * b_,
+        _OKLAB_TO_LMS_REFERENCE[2, 1] * a_ + _OKLAB_TO_LMS_REFERENCE[2, 2] * b_,
+    )

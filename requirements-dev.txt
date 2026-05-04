@@ -1,2 +1,2 @@
-numpy
-pytest
+numpy>=1.26,<3
+pytest>=8,<9
