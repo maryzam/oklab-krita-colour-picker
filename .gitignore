@@ -219,7 +219,3 @@ __marimo__/
 
 # Local legacy reference plugin. Keep untracked; do not commit legacy code.
 legacy-plugin/
-
-# Rewrite planning docs are intentionally tracked.
-!refactoring-docs/
-!refactoring-docs/**

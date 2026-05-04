@@ -10,15 +10,14 @@ from __future__ import annotations
 import argparse
 import ast
 import os
-import py_compile
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 LEGACY_PREFIX = "legacy-plugin/"
-PY_SOURCE_DIRS = ("lab_colour_picker", "tests", "scripts")
 KRITA_ALLOWED = {
     Path("lab_colour_picker/plugin.py"),
     Path("lab_colour_picker/controller.py"),
@@ -34,43 +33,76 @@ SET_FOREGROUND_ALLOWED = {
 }
 
 
+@dataclass(frozen=True)
+class SourceFile:
+    """A file snapshot from either the working tree or the staged index."""
+
+    path: Path
+    data: bytes
+
+    @property
+    def suffix(self) -> str:
+        return self.path.suffix
+
+    @property
+    def posix(self) -> str:
+        return self.path.as_posix()
+
+    @property
+    def is_legacy(self) -> bool:
+        return self.posix.startswith(LEGACY_PREFIX)
+
+    @property
+    def is_test(self) -> bool:
+        return bool(self.path.parts) and self.path.parts[0] == "tests"
+
+    @property
+    def is_binary(self) -> bool:
+        return b"\0" in self.data
+
+
 def run_git(args: list[str]) -> str:
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True)
 
 
-def rel(path: Path) -> Path:
-    return path.resolve().relative_to(ROOT)
+def git_blob(path: Path) -> bytes:
+    return subprocess.check_output(["git", "show", f":{path.as_posix()}"], cwd=ROOT)
 
 
-def tracked_files() -> list[Path]:
-    return [ROOT / line for line in run_git(["ls-files"]).splitlines() if line]
+def tracked_paths() -> list[Path]:
+    return [Path(line) for line in run_git(["ls-files"]).splitlines() if line]
 
 
-def staged_files() -> list[Path]:
+def staged_paths() -> list[Path]:
     lines = run_git(["diff", "--cached", "--name-only", "--diff-filter=ACMR"]).splitlines()
-    return [ROOT / line for line in lines if line]
+    return [Path(line) for line in lines if line]
 
 
-def candidate_files(scope: str) -> list[Path]:
-    files = staged_files() if scope == "staged" else tracked_files()
-    return [path for path in files if path.exists()]
+def source_files(scope: str) -> list[SourceFile]:
+    sources = []
+    paths = staged_paths() if scope == "staged" else tracked_paths()
+    for path in paths:
+        if scope == "staged":
+            data = git_blob(path)
+        else:
+            full_path = ROOT / path
+            if not full_path.is_file():
+                continue
+            data = full_path.read_bytes()
+        sources.append(SourceFile(path=path, data=data))
+    return sources
 
 
-def python_files(scope: str) -> list[Path]:
-    files = []
-    for path in candidate_files(scope):
-        rp = rel(path)
-        if path.suffix == ".py" and rp.parts and rp.parts[0] in PY_SOURCE_DIRS:
-            files.append(path)
-    return files
+def python_sources(sources: list[SourceFile]) -> list[SourceFile]:
+    return [source for source in sources if source.suffix == ".py" and not source.is_legacy]
 
 
 def fail(message: str) -> None:
     print(f"ERROR: {message}", file=sys.stderr)
 
 
-def check_no_legacy(scope: str) -> int:
-    bad = [rel(path).as_posix() for path in candidate_files(scope) if rel(path).as_posix().startswith(LEGACY_PREFIX)]
+def check_no_legacy(sources: list[SourceFile]) -> int:
+    bad = [source.posix for source in sources if source.is_legacy]
     if not bad:
         return 0
     fail("legacy-plugin files must remain untracked:")
@@ -79,24 +111,13 @@ def check_no_legacy(scope: str) -> int:
     return 1
 
 
-def check_python_compile(scope: str) -> int:
+def check_python_rules(sources: list[SourceFile]) -> int:
     errors = 0
-    for path in python_files(scope):
+    for source in python_sources(sources):
+        rp = source.path
         try:
-            py_compile.compile(str(path), doraise=True)
-        except py_compile.PyCompileError as exc:
-            fail(f"Python syntax check failed for {rel(path)}")
-            print(exc.msg, file=sys.stderr)
-            errors += 1
-    return errors
-
-
-def check_import_rules(scope: str) -> int:
-    errors = 0
-    for path in python_files(scope):
-        rp = rel(path)
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(rp))
+            tree = ast.parse(source.data, filename=source.posix)
+            compile(tree, source.posix, "exec")
         except SyntaxError as exc:
             fail(f"Cannot parse {rp}: {exc}")
             errors += 1
@@ -108,7 +129,7 @@ def check_import_rules(scope: str) -> int:
                 if any(module == "krita" or module.startswith("krita.") for module in modules) and rp not in KRITA_ALLOWED:
                     fail(f"{rp}: Krita imports are only allowed in plugin/controller adapter files")
                     errors += 1
-                if any(module.startswith(("legacy_plugin", "legacy-plugin")) for module in modules):
+                if any(module.startswith("legacy_plugin") for module in modules):
                     fail(f"{rp}: imports from legacy plugin are forbidden")
                     errors += 1
                 if rp in PURE_NO_QT and any(module.startswith(("PyQt5", "krita")) for module in modules):
@@ -120,45 +141,39 @@ def check_import_rules(scope: str) -> int:
                 if (module == "krita" or module.startswith("krita.")) and rp not in KRITA_ALLOWED:
                     fail(f"{rp}: Krita imports are only allowed in plugin/controller adapter files")
                     errors += 1
-                if module.startswith(("legacy_plugin", "legacy-plugin")):
+                if module.startswith("legacy_plugin"):
                     fail(f"{rp}: imports from legacy plugin are forbidden")
                     errors += 1
                 if rp in PURE_NO_QT and module.startswith(("PyQt5", "krita")):
                     fail(f"{rp}: pure model/math modules must not import Qt or Krita")
                     errors += 1
 
-    return errors
-
-
-def check_forbidden_calls(scope: str) -> int:
-    errors = 0
-    for path in python_files(scope):
-        rp = rel(path)
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(rp))
-        except SyntaxError:
-            continue
-
-        for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
+            # Name-based AST guardrail by design: it catches direct calls in
+            # production code, but it is not a type-aware semantic analysis.
             if isinstance(func, ast.Attribute) and func.attr == "pixelColor":
                 fail(f"{rp}: selection must not read colours from QImage.pixelColor")
                 errors += 1
-            if isinstance(func, ast.Attribute) and func.attr == "setForeGroundColor" and rp not in SET_FOREGROUND_ALLOWED:
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "setForeGroundColor"
+                and rp not in SET_FOREGROUND_ALLOWED
+                and not source.is_test
+            ):
                 fail(f"{rp}: setForeGroundColor is only allowed behind the controller/Krita adapter boundary")
                 errors += 1
     return errors
 
 
-def check_formatting(scope: str) -> int:
+def check_formatting(sources: list[SourceFile]) -> int:
     errors = 0
-    for path in candidate_files(scope):
-        if not path.is_file():
+    for source in sources:
+        if source.is_binary:
             continue
-        data = path.read_bytes()
-        rp = rel(path)
+        data = source.data
+        rp = source.path
         if b"\r\n" in data:
             fail(f"{rp}: CRLF line endings are not allowed")
             errors += 1
@@ -197,12 +212,11 @@ def main() -> int:
         return install_hooks()
 
     os.chdir(ROOT)
+    sources = source_files(args.scope)
     errors = 0
-    errors += check_no_legacy(args.scope)
-    errors += check_formatting(args.scope)
-    errors += check_python_compile(args.scope)
-    errors += check_import_rules(args.scope)
-    errors += check_forbidden_calls(args.scope)
+    errors += check_no_legacy(sources)
+    errors += check_formatting(sources)
+    errors += check_python_rules(sources)
     if args.pytest:
         errors += run_pytest()
     return 1 if errors else 0

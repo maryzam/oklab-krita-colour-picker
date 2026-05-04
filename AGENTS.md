@@ -17,6 +17,17 @@ and ordered by rewrite slice.
   controller/Krita adapter boundary.
 - Selection must come from selector models, never from `QImage.pixelColor`.
 
+## First-Time Setup
+
+Install tracked Git hooks before making changes in a fresh clone:
+
+```sh
+python3 scripts/checks/dev_checks.py --install-hooks
+```
+
+The hooks run staged-index checks before commit and tracked-tree checks before
+push. GitHub Actions also runs the tracked-tree check on PRs.
+
 ## Local Loop
 
 1. Create a branch per rewrite slice, for example `rewrite/01-color-math`.
@@ -24,12 +35,6 @@ and ordered by rewrite slice.
 3. Run focused tests while developing, then run the pre-push check before PR.
 4. Inspect staged files before commit and reject anything under
    `legacy-plugin/`.
-
-Install tracked Git hooks once per clone:
-
-```sh
-python3 scripts/checks/dev_checks.py --install-hooks
-```
 
 Run checks manually:
 
