@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+python3 scripts/checks/dev_checks.py --scope tracked --pytest
