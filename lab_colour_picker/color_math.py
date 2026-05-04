@@ -9,6 +9,8 @@ import numpy as np
 
 SRGB_GAMMA_THRESHOLD = 0.04045
 LINEAR_SRGB_GAMMA_THRESHOLD = 0.0031308
+MAX_SATURATION_HALLEY_ITERATIONS = 3
+GAMUT_INTERSECTION_HALLEY_ITERATIONS = 3
 
 _LINEAR_SRGB_TO_LMS = np.array(
     [
@@ -159,10 +161,10 @@ def compute_max_saturation(a_, b_):
     saturation = k0 + k1 * a_ + k2 * b_ + k3 * a_ * a_ + k4 * a_ * b_
     k_l, k_m, k_s = _oklab_hue_to_lms_coefficients(a_, b_)
 
-    for _ in range(3):
-        l_ = 1.0 + saturation * k_l
-        m_ = 1.0 + saturation * k_m
-        s_ = 1.0 + saturation * k_s
+    for _ in range(MAX_SATURATION_HALLEY_ITERATIONS):
+        l_ = _OKLAB_TO_LMS[0, 0] + saturation * k_l
+        m_ = _OKLAB_TO_LMS[1, 0] + saturation * k_m
+        s_ = _OKLAB_TO_LMS[2, 0] + saturation * k_s
         l = l_ * l_ * l_
         m = m_ * m_ * m_
         s = s_ * s_ * s_
@@ -253,12 +255,12 @@ def _refine_upper_intersection_t(a_, b_, l1, c1, l0, t):
     m_dt = d_l + d_c * k_m
     s_dt = d_l + d_c * k_s
 
-    for _ in range(3):
+    for _ in range(GAMUT_INTERSECTION_HALLEY_ITERATIONS):
         l = l0 * (1.0 - t) + t * l1
         c = t * c1
-        l_ = l + c * k_l
-        m_ = l + c * k_m
-        s_ = l + c * k_s
+        l_ = _OKLAB_TO_LMS[0, 0] * l + c * k_l
+        m_ = _OKLAB_TO_LMS[1, 0] * l + c * k_m
+        s_ = _OKLAB_TO_LMS[2, 0] * l + c * k_s
 
         r, t_r = _halley_channel_t(
             *_LMS3_TO_LINEAR_SRGB[0],

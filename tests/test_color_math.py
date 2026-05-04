@@ -161,13 +161,43 @@ def test_find_cusp_lands_on_srgb_gamut_boundary(hue):
     assert color_math.in_srgb_gamut(just_outside, epsilon=1e-6) is False
 
 
-def test_find_gamut_intersection_lower_half_matches_slow_oracle():
-    hue = 0.0
+@pytest.mark.parametrize(
+    ("hue", "l0", "l1", "c1"),
+    [
+        (0.0, 0.05, 0.20, 1.0),
+        (1.0, 0.10, 0.32, 1.1),
+        (2.0, 0.08, 0.24, 0.9),
+        (4.0, 0.15, 0.35, 1.2),
+    ],
+)
+def test_find_gamut_intersection_lower_half_matches_slow_oracle(hue, l0, l1, c1):
     a_ = math.cos(hue)
     b_ = math.sin(hue)
-    l0 = 0.05
-    l1 = 0.2
-    c1 = 1.0
+    l_cusp, c_cusp = color_math.find_cusp(a_, b_)
+
+    assert (l1 - l0) * c_cusp - (l_cusp - l0) * c1 <= 0.0
+
+    actual = color_math.find_gamut_intersection(a_, b_, l1, c1, l0)
+    expected = _slow_gamut_intersection(a_, b_, l1, c1, l0)
+
+    assert actual == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("hue", "l0", "l1", "c1"),
+    [
+        (0.0, 0.70, 0.70, 1.0),
+        (2.0, 0.98, 0.98, 1.0),
+        (4.0, 0.80, 0.80, 1.0),
+        (5.770272220879211, 0.7858333333333334, 0.7858333333333334, 1.0),
+    ],
+)
+def test_find_gamut_intersection_upper_half_matches_slow_oracle(hue, l0, l1, c1):
+    a_ = math.cos(hue)
+    b_ = math.sin(hue)
+    l_cusp, c_cusp = color_math.find_cusp(a_, b_)
+
+    assert (l1 - l0) * c_cusp - (l_cusp - l0) * c1 > 0.0
 
     actual = color_math.find_gamut_intersection(a_, b_, l1, c1, l0)
     expected = _slow_gamut_intersection(a_, b_, l1, c1, l0)
