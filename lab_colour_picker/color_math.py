@@ -27,7 +27,7 @@ _LMS_TO_OKLAB = np.array(
 _OKLAB_TO_LMS = np.linalg.inv(_LMS_TO_OKLAB)
 _LMS3_TO_LINEAR_SRGB = np.linalg.inv(_LINEAR_SRGB_TO_LMS)
 
-_MAX_SATURATION_COEFFICIENTS = np.array(
+_MAX_SATURATION_POLY_COEFFICIENTS = np.array(
     [
         [
             1.19086277,
@@ -35,9 +35,6 @@ _MAX_SATURATION_COEFFICIENTS = np.array(
             0.59662641,
             0.75515197,
             0.56771245,
-            4.0767416621,
-            -3.3077115913,
-            0.2309699292,
         ],
         [
             0.73956515,
@@ -45,9 +42,6 @@ _MAX_SATURATION_COEFFICIENTS = np.array(
             0.08285427,
             0.12541070,
             0.14503204,
-            -1.2684380046,
-            2.6097574011,
-            -0.3413193965,
         ],
         [
             1.35733652,
@@ -55,17 +49,7 @@ _MAX_SATURATION_COEFFICIENTS = np.array(
             -1.15130210,
             -0.50559606,
             0.00692167,
-            -0.0041960863,
-            -0.7034186147,
-            1.7076147010,
         ],
-    ]
-)
-_OKLAB_TO_LMS_REFERENCE = np.array(
-    [
-        [1.0, 0.3963377774, 0.2158037573],
-        [1.0, -0.1055613458, -0.0638541728],
-        [1.0, -0.0894841775, -1.2914855480],
     ]
 )
 
@@ -74,11 +58,12 @@ def srgb_to_linear(srgb):
     """Convert gamma-encoded sRGB component values in [0, 1] to linear sRGB."""
 
     srgb = np.asarray(srgb, dtype=float)
-    return np.where(
-        srgb <= SRGB_GAMMA_THRESHOLD,
-        srgb / 12.92,
-        np.power((srgb + 0.055) / 1.055, 2.4),
-    )
+    with np.errstate(invalid="ignore"):
+        return np.where(
+            srgb <= SRGB_GAMMA_THRESHOLD,
+            srgb / 12.92,
+            np.power((srgb + 0.055) / 1.055, 2.4),
+        )
 
 
 def linear_to_srgb(linear):
@@ -167,8 +152,9 @@ def compute_max_saturation(a_, b_):
     red = -1.88170328 * a_ - 0.80936493 * b_ > 1.0
     green = (1.81444104 * a_ - 1.19445276 * b_ > 1.0) & ~red
     region = np.where(red, 0, np.where(green, 1, 2))
-    coeffs = _MAX_SATURATION_COEFFICIENTS[region]
-    k0, k1, k2, k3, k4, wl, wm, ws = np.moveaxis(coeffs, -1, 0)
+    poly_coeffs = _MAX_SATURATION_POLY_COEFFICIENTS[region]
+    k0, k1, k2, k3, k4 = np.moveaxis(poly_coeffs, -1, 0)
+    wl, wm, ws = np.moveaxis(_LMS3_TO_LINEAR_SRGB[region], -1, 0)
 
     saturation = k0 + k1 * a_ + k2 * b_ + k3 * a_ * a_ + k4 * a_ * b_
     k_l, k_m, k_s = _oklab_hue_to_lms_coefficients(a_, b_)
@@ -275,9 +261,7 @@ def _refine_upper_intersection_t(a_, b_, l1, c1, l0, t):
         s_ = l + c * k_s
 
         r, t_r = _halley_channel_t(
-            4.0767416621,
-            -3.3077115913,
-            0.2309699292,
+            *_LMS3_TO_LINEAR_SRGB[0],
             l_,
             m_,
             s_,
@@ -286,9 +270,7 @@ def _refine_upper_intersection_t(a_, b_, l1, c1, l0, t):
             s_dt,
         )
         g, t_g = _halley_channel_t(
-            -1.2684380046,
-            2.6097574011,
-            -0.3413193965,
+            *_LMS3_TO_LINEAR_SRGB[1],
             l_,
             m_,
             s_,
@@ -297,9 +279,7 @@ def _refine_upper_intersection_t(a_, b_, l1, c1, l0, t):
             s_dt,
         )
         b, t_b = _halley_channel_t(
-            -0.0041960863,
-            -0.7034186147,
-            1.7076147010,
+            *_LMS3_TO_LINEAR_SRGB[2],
             l_,
             m_,
             s_,
@@ -349,7 +329,7 @@ def _bool_if_scalar(value):
 
 def _oklab_hue_to_lms_coefficients(a_, b_):
     return (
-        _OKLAB_TO_LMS_REFERENCE[0, 1] * a_ + _OKLAB_TO_LMS_REFERENCE[0, 2] * b_,
-        _OKLAB_TO_LMS_REFERENCE[1, 1] * a_ + _OKLAB_TO_LMS_REFERENCE[1, 2] * b_,
-        _OKLAB_TO_LMS_REFERENCE[2, 1] * a_ + _OKLAB_TO_LMS_REFERENCE[2, 2] * b_,
+        _OKLAB_TO_LMS[0, 1] * a_ + _OKLAB_TO_LMS[0, 2] * b_,
+        _OKLAB_TO_LMS[1, 1] * a_ + _OKLAB_TO_LMS[1, 2] * b_,
+        _OKLAB_TO_LMS[2, 1] * a_ + _OKLAB_TO_LMS[2, 2] * b_,
     )
