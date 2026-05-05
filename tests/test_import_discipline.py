@@ -10,6 +10,7 @@ KRITA_IMPORT_ALLOWED = {
 }
 PURE_NO_QT_OR_KRITA = {
     Path("lab_colour_picker/color_math.py"),
+    Path("lab_colour_picker/renderers.py"),
     Path("lab_colour_picker/selector_models.py"),
 }
 

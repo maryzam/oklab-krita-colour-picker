@@ -25,6 +25,7 @@ KRITA_ALLOWED = {
 }
 PURE_NO_QT = {
     Path("lab_colour_picker/color_math.py"),
+    Path("lab_colour_picker/renderers.py"),
     Path("lab_colour_picker/selector_models.py"),
 }
 SET_FOREGROUND_ALLOWED = {

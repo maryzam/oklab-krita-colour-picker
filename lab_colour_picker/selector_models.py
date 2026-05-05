@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
+import numpy.typing as npt
 
 from lab_colour_picker import color_math
 
@@ -20,7 +21,7 @@ POSITION_EPSILON = 1e-12
 AB_EPSILON = 1e-9
 CHROMA_EPSILON = 1e-9
 LIGHTNESS_EPSILON = 1e-9
-CHROMA_LIGHTNESS_RING_EPSILON = 1e-9
+CHROMA_LIGHTNESS_RING_HALF_WIDTH = 0.5
 
 Position = tuple[float, float]
 Size = tuple[float, float]
@@ -44,6 +45,28 @@ class LightnessSliceModel:
         max_chroma = color_math.max_chroma_for_lh(self.lightness, hue)
         chroma = normalized_radius * max_chroma
         return color_math.oklch_to_oklab([self.lightness, chroma, hue])
+
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        geometry = _circle_geometry_arrays(x, y, size)
+        if geometry is None:
+            return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
+
+        normalized_radius, hue, valid = geometry
+        max_chroma = color_math.max_chroma_for_lh(self.lightness, hue)
+        oklch = np.stack(
+            (
+                np.full_like(normalized_radius, self.lightness, dtype=float),
+                normalized_radius * max_chroma,
+                hue,
+            ),
+            axis=-1,
+        )
+        return color_math.oklch_to_oklab(oklch), valid
 
     def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
@@ -83,6 +106,30 @@ class HueLightnessModel:
         if max_chroma <= CHROMA_EPSILON:
             return color_math.oklch_to_oklab([lightness, 0.0, self.hue])
         return color_math.oklch_to_oklab([lightness, chroma_fraction * max_chroma, self.hue])
+
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        bounds = _position_in_bounds_arrays(x, y, size)
+        if bounds is None:
+            return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
+
+        x, y, width, height, valid = bounds
+        lightness = 1.0 - y / (height - 1.0)
+        chroma_fraction = x / (width - 1.0)
+        max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
+        oklch = np.stack(
+            (
+                lightness,
+                chroma_fraction * max_chroma,
+                np.full_like(lightness, self.hue, dtype=float),
+            ),
+            axis=-1,
+        )
+        return color_math.oklch_to_oklab(oklch), valid
 
     def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         bounds = _size_bounds(size)
@@ -129,12 +176,39 @@ class ChromaLightnessModel:
         if geometry is None:
             return None
 
-        normalized_radius, hue, _, _ = geometry
-        if normalized_radius < 1.0 - CHROMA_LIGHTNESS_RING_EPSILON:
+        normalized_radius, hue, _, radius = geometry
+        if not _on_chroma_lightness_ring(normalized_radius, radius):
             return None
         if self.chroma > color_math.max_chroma_for_lh(self.lightness, hue) + CHROMA_EPSILON:
             return None
         return color_math.oklch_to_oklab([self.lightness, self.chroma, hue])
+
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        geometry = _circle_geometry_arrays(x, y, size)
+        if geometry is None:
+            return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
+
+        normalized_radius, hue, circle_valid = geometry
+        max_chroma = color_math.max_chroma_for_lh(self.lightness, hue)
+        valid = (
+            circle_valid
+            & _on_chroma_lightness_ring(normalized_radius, _radius_for_size(size))
+            & (self.chroma <= max_chroma + CHROMA_EPSILON)
+        )
+        oklch = np.stack(
+            (
+                np.full_like(normalized_radius, self.lightness, dtype=float),
+                np.full_like(normalized_radius, self.chroma, dtype=float),
+                hue,
+            ),
+            axis=-1,
+        )
+        return color_math.oklch_to_oklab(oklch), valid
 
     def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
@@ -166,7 +240,28 @@ def _circle_geometry(position: Sequence[float], size: Sequence[float]):
         return None
 
     hue = 0.0 if distance <= POSITION_EPSILON else math.atan2(dy, dx) % math.tau
-    return min(distance / radius, 1.0), hue, center_x, center_y
+    return min(distance / radius, 1.0), hue, center_x, radius
+
+
+def _circle_geometry_arrays(x, y, size: Sequence[float]):
+    bounds = _position_in_bounds_arrays(x, y, size)
+    if bounds is None:
+        return None
+
+    x, y, width, height, bounds_valid = bounds
+    radius = (min(width, height) - 1.0) / 2.0
+    if radius <= 0.0:
+        return None
+
+    center_x = (width - 1.0) / 2.0
+    center_y = (height - 1.0) / 2.0
+    dx = x - center_x
+    dy = center_y - y
+    distance = np.hypot(dx, dy)
+    circle_valid = bounds_valid & (distance <= radius + POSITION_EPSILON)
+    normalized_radius = np.minimum(distance / radius, 1.0)
+    hue = np.where(distance <= POSITION_EPSILON, 0.0, np.mod(np.arctan2(dy, dx), math.tau))
+    return normalized_radius, hue, circle_valid
 
 
 def _position_from_circle(normalized_radius: float, hue: float, size: Sequence[float]) -> Position | None:
@@ -200,11 +295,36 @@ def _position_in_bounds(position: Sequence[float], size: Sequence[float]):
     return x, y, width, height
 
 
+def _position_in_bounds_arrays(x, y, size: Sequence[float]):
+    bounds = _size_bounds(size)
+    if bounds is None:
+        return None
+
+    width, height = bounds
+    x, y = np.broadcast_arrays(np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+    valid = (0.0 <= x) & (x <= width - 1.0) & (0.0 <= y) & (y <= height - 1.0)
+    return x, y, width, height, valid
+
+
 def _size_bounds(size: Sequence[float]):
     width, height = (float(size[0]), float(size[1]))
     if width <= 1.0 or height <= 1.0:
         return None
     return width, height
+
+
+def _radius_for_size(size: Sequence[float]) -> float:
+    width, height = (float(size[0]), float(size[1]))
+    return (min(width, height) - 1.0) / 2.0
+
+
+def _on_chroma_lightness_ring(normalized_radius, radius):
+    assert radius > 0.0
+    return normalized_radius >= max(0.0, 1.0 - CHROMA_LIGHTNESS_RING_HALF_WIDTH / radius)
+
+
+def _empty_color_grid(x):
+    return np.zeros(np.asarray(x).shape + (3,), dtype=float)
 
 
 def _on_hue_plane(oklab: Sequence[float], hue: float) -> bool:
