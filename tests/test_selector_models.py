@@ -96,6 +96,13 @@ def test_hue_lightness_top_and_bottom_rows_are_selectable_end_to_end():
     np.testing.assert_allclose(model.color_at_position((100.0, 100.0), (101.0, 101.0)), [0.0, 0.0, 0.0], atol=1e-12)
 
 
+@pytest.mark.parametrize(("color", "expected"), [([1.0, 0.0, 0.0], (0.0, 0.0)), ([0.0, 0.0, 0.0], (0.0, 100.0))])
+def test_hue_lightness_inverse_collapses_achromatic_endpoint_rows_to_left_edge(color, expected):
+    model = HueLightnessModel(hue=0.0)
+
+    np.testing.assert_allclose(model.position_for_color(color, (101.0, 101.0)), expected, atol=1e-12)
+
+
 def test_hue_lightness_rejects_degenerate_or_out_of_bounds_positions():
     model = HueLightnessModel(hue=0.0)
 
@@ -117,6 +124,13 @@ def test_hue_lightness_round_trips_position_and_color(position):
 def test_hue_lightness_rejects_color_from_different_hue_plane():
     model = HueLightnessModel(hue=0.0)
     color = color_math.oklch_to_oklab([0.5, 0.05, math.pi / 2.0])
+
+    assert model.position_for_color(color, (101.0, 101.0)) is None
+
+
+def test_hue_lightness_rejects_color_from_antipodal_hue_ray():
+    model = HueLightnessModel(hue=0.0)
+    color = color_math.oklch_to_oklab([0.5, 0.05, math.pi])
 
     assert model.position_for_color(color, (101.0, 101.0)) is None
 

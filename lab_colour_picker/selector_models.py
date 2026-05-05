@@ -105,6 +105,8 @@ class HueLightnessModel:
         if chroma_fraction > 1.0 + POSITION_EPSILON:
             return None
 
+        # L=0 and L=1 are achromatic bands: every x maps to the same colour,
+        # so inverse placement uses the left edge as the canonical position.
         return (
             float(np.clip(chroma_fraction, 0.0, 1.0) * (width - 1.0)),
             float((1.0 - lightness) * (height - 1.0)),
@@ -208,7 +210,9 @@ def _size_bounds(size: Sequence[float]):
 def _on_hue_plane(oklab: Sequence[float], hue: float) -> bool:
     a = float(oklab[1])
     b = float(oklab[2])
-    return abs(a * math.sin(hue) - b * math.cos(hue)) <= AB_EPSILON
+    perpendicular = a * math.sin(hue) - b * math.cos(hue)
+    along = a * math.cos(hue) + b * math.sin(hue)
+    return abs(perpendicular) <= AB_EPSILON and along >= -AB_EPSILON
 
 
 def _validate_lightness(lightness: float) -> None:
