@@ -125,10 +125,12 @@ class ColourPickerController:
         if self._is_self_feedback(normalized):
             return False
         selected_normalized = None if self._selected_colour is None else normalize_oklab_for_krita(self._selected_colour)
-        if selected_normalized is not None and _normalized_equal(selected_normalized, normalized):
+        if selected_normalized is not None and _quantized_equal(selected_normalized, normalized):
             return False
 
         self._selected_colour = colour
+        if self._pending_commit is not None:
+            self._selection_before_pending_commit = colour.copy()
         self._last_committed_token = None
         self._last_committed_colour = None
         for listener in self._foreground_listeners:
@@ -161,7 +163,7 @@ class ColourPickerController:
             return
 
         normalized = normalize_oklab_for_krita(colour)
-        if self._last_committed_colour is not None and _normalized_equal(normalized, self._last_committed_colour):
+        if self._last_committed_colour is not None and _quantized_equal(normalized, self._last_committed_colour):
             self._selected_colour = colour
             return
 
@@ -172,14 +174,14 @@ class ColourPickerController:
 
         self._commit_token += 1
         self._last_committed_token = self._commit_token
-        self._last_committed_colour = _as_oklab(committed)
+        self._last_committed_colour = normalize_oklab_for_krita(committed)
         self._selected_colour = colour
 
     def _is_self_feedback(self, normalized_colour: np.ndarray) -> bool:
         return (
             self._last_committed_token == self._commit_token
             and self._last_committed_colour is not None
-            and _normalized_equal(normalized_colour, self._last_committed_colour)
+            and _quantized_equal(normalized_colour, self._last_committed_colour)
         )
 
 
@@ -198,5 +200,7 @@ def _as_oklab(oklab: Sequence[float]) -> np.ndarray:
     return colour.copy()
 
 
-def _normalized_equal(left: np.ndarray, right: np.ndarray) -> bool:
+def _quantized_equal(left: np.ndarray, right: np.ndarray) -> bool:
+    """Compare colours already returned by ``normalize_oklab_for_krita``."""
+
     return bool(np.array_equal(left, right))

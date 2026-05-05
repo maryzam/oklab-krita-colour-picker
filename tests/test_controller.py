@@ -40,6 +40,21 @@ def test_duplicate_commits_are_suppressed_after_normalization():
     assert len(adapter.set_foreground_calls) == 1
 
 
+def test_duplicate_suppression_normalizes_adapter_readback_before_storage():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter(readback_offset=np.array([1e-10, -1e-10, 1e-10]))
+    controller = ColourPickerController(adapter, scheduler=scheduler)
+    colour = np.array([0.55, 0.02, -0.03])
+    same_quantized_colour = normalize_oklab_for_krita(colour)
+
+    controller.request_foreground_commit(colour)
+    scheduler.run_pending()
+    controller.request_foreground_commit(same_quantized_colour)
+    scheduler.run_pending()
+
+    assert len(adapter.set_foreground_calls) == 1
+
+
 def test_missing_active_krita_view_does_not_record_a_commit():
     scheduler = FakeScheduler()
     adapter = FakeKritaAdapter(available=False)
@@ -121,6 +136,23 @@ def test_external_change_clears_stale_self_feedback_suppression():
     assert controller.sync_external_foreground() is True
     assert len(observed) == 2
     np.testing.assert_allclose(observed[-1], normalize_oklab_for_krita(committed))
+
+
+def test_external_sync_refreshes_failed_commit_rollback_snapshot():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter(available=False)
+    controller = ColourPickerController(adapter, scheduler=scheduler)
+    first_pending = np.array([0.65, 0.04, -0.02])
+    external = np.array([0.38, -0.02, 0.06])
+    latest_pending = np.array([0.5, 0.01, 0.02])
+
+    controller.request_foreground_commit(first_pending)
+    adapter.foreground_colour = external
+    assert controller.sync_external_foreground() is True
+    controller.request_foreground_commit(latest_pending)
+    scheduler.run_pending()
+
+    np.testing.assert_allclose(controller.selected_colour, external)
 
 
 def test_hidden_dock_stops_polling_and_visible_dock_restarts_it():
@@ -241,6 +273,13 @@ def test_krita_adapter_rejects_non_srgb_foreground_without_qcolor_conversion():
     assert adapter.get_foreground() is None
 
 
+def test_krita_adapter_rejects_linear_srgb_fallback_without_qcolor_conversion():
+    view = FakeView(foreground_color=FakeManagedColor(profile="linear-sRGB-elle-V2.icc"))
+    adapter = KritaForegroundAdapter(FakeKrita(active_window=FakeWindow(active_view=view)))
+
+    assert adapter.get_foreground() is None
+
+
 def test_krita_adapter_does_not_rescale_normalized_components_above_one():
     managed = FakeManagedColor(components=[1.2, 0.5, 0.25, 1.0])
     view = FakeView(foreground_color=managed)
@@ -306,8 +345,9 @@ class FakeRepeatingTimer:
 
 
 class FakeKritaAdapter:
-    def __init__(self, *, available=True):
+    def __init__(self, *, available=True, readback_offset=None):
         self.available = available
+        self.readback_offset = None if readback_offset is None else np.asarray(readback_offset, dtype=float)
         self.foreground_colour = None
         self.set_foreground_calls = []
 
@@ -317,6 +357,8 @@ class FakeKritaAdapter:
         if not self.available:
             return None
         self.foreground_colour = normalize_oklab_for_krita(colour)
+        if self.readback_offset is not None:
+            return self.foreground_colour + self.readback_offset
         return self.foreground_colour
 
     def get_foreground(self):

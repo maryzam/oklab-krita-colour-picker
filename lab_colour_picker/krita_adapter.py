@@ -10,6 +10,13 @@ from lab_colour_picker import color_math
 from lab_colour_picker.controller import normalize_oklab_for_krita
 
 
+SUPPORTED_SRGB_PROFILES = {
+    "srgb-elle-v2-srgbtrc.icc",
+    "srgb built-in",
+    "srgb iec61966-2.1",
+}
+
+
 class QtSingleShotScheduler:
     """Coalesce work onto the next Qt event-loop turn."""
 
@@ -141,5 +148,5 @@ def _is_srgb_rgba_u8(managed_color) -> bool:
     return (
         str(color_model).upper() == "RGBA"
         and str(color_depth).upper() == "U8"
-        and "srgb" in str(color_profile).lower()
+        and str(color_profile).strip().lower() in SUPPORTED_SRGB_PROFILES
     )
