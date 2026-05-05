@@ -1,5 +1,6 @@
 import numpy as np
 
+from lab_colour_picker import color_math
 from lab_colour_picker.controller import ColourPickerController, normalize_oklab_for_krita
 from lab_colour_picker.krita_adapter import KritaForegroundAdapter
 
@@ -48,9 +49,25 @@ def test_missing_active_krita_view_does_not_record_a_commit():
     controller.request_foreground_commit(colour)
     scheduler.run_pending()
 
-    assert adapter.set_foreground_calls == [colour.tolist()]
+    assert len(adapter.set_foreground_calls) == 1
+    np.testing.assert_allclose(adapter.set_foreground_calls[0], colour)
     assert controller.last_committed_token is None
     assert controller.last_committed_colour is None
+    assert controller.selected_colour is None
+
+
+def test_failed_commit_rolls_back_to_previous_selected_colour():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter(available=False)
+    controller = ColourPickerController(adapter, scheduler=scheduler)
+    previous = np.array([0.45, -0.01, 0.03])
+    requested = np.array([0.5, 0.01, 0.02])
+
+    controller.set_preview_colour(previous)
+    controller.request_foreground_commit(requested)
+    scheduler.run_pending()
+
+    np.testing.assert_allclose(controller.selected_colour, previous)
 
 
 def test_external_foreground_sync_updates_selected_colour_once():
@@ -119,6 +136,21 @@ def test_hidden_dock_stops_polling_and_visible_dock_restarts_it():
     assert timer.started_intervals == [250, 250]
 
 
+def test_initially_hidden_dock_does_not_start_polling_until_visible():
+    timer = FakeRepeatingTimer()
+    controller = ColourPickerController(
+        FakeKritaAdapter(),
+        scheduler=FakeScheduler(),
+        foreground_timer=timer,
+        initially_visible=False,
+    )
+
+    assert timer.started_intervals == []
+    controller.set_dock_visible(True)
+
+    assert timer.started_intervals == [250]
+
+
 def test_timer_tick_syncs_foreground_only_while_visible():
     adapter = FakeKritaAdapter()
     timer = FakeRepeatingTimer()
@@ -134,6 +166,50 @@ def test_timer_tick_syncs_foreground_only_while_visible():
     assert not np.allclose(controller.selected_colour, adapter.foreground_colour)
 
 
+def test_removed_foreground_listener_does_not_receive_updates():
+    adapter = FakeKritaAdapter()
+    controller = ColourPickerController(adapter, scheduler=FakeScheduler())
+    observed = []
+    controller.add_foreground_listener(observed.append)
+    controller.remove_foreground_listener(observed.append)
+
+    adapter.foreground_colour = np.array([0.48, 0.02, 0.01])
+    assert controller.sync_external_foreground() is True
+
+    assert observed == []
+
+
+def test_raising_foreground_listener_does_not_block_later_listeners():
+    adapter = FakeKritaAdapter()
+    controller = ColourPickerController(adapter, scheduler=FakeScheduler())
+    observed = []
+
+    def raising_listener(_colour):
+        raise RuntimeError("deleted widget")
+
+    controller.add_foreground_listener(raising_listener)
+    controller.add_foreground_listener(observed.append)
+    adapter.foreground_colour = np.array([0.48, 0.02, 0.01])
+
+    assert controller.sync_external_foreground() is True
+    assert len(observed) == 1
+
+
+def test_preview_does_not_replace_pending_commit_before_flush():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    controller = ColourPickerController(adapter, scheduler=scheduler)
+    committed = np.array([0.45, 0.01, 0.02])
+    preview = np.array([0.62, -0.03, 0.04])
+
+    controller.request_foreground_commit(committed)
+    controller.set_preview_colour(preview)
+    scheduler.run_pending()
+
+    np.testing.assert_allclose(adapter.set_foreground_calls[0], committed)
+    np.testing.assert_allclose(controller.selected_colour, committed)
+
+
 def test_krita_adapter_returns_none_without_active_window():
     adapter = KritaForegroundAdapter(FakeKrita(active_window=None))
 
@@ -146,6 +222,48 @@ def test_krita_adapter_returns_none_without_active_view():
 
     assert adapter.get_foreground() is None
     assert adapter.set_foreground([0.5, 0.0, 0.0]) is None
+
+
+def test_krita_adapter_reads_foreground_through_qcolor_srgb_components():
+    view = FakeView(foreground_color=FakeManagedColor(qcolor=FakeQColor(0.25, 0.5, 0.75)))
+    adapter = KritaForegroundAdapter(FakeKrita(active_window=FakeWindow(active_view=view)))
+
+    np.testing.assert_allclose(
+        adapter.get_foreground(),
+        color_math.srgb_to_oklab([0.25, 0.5, 0.75]),
+    )
+
+
+def test_krita_adapter_rejects_non_srgb_foreground_without_qcolor_conversion():
+    view = FakeView(foreground_color=FakeManagedColor(model="CMYK", profile="Chemical proof"))
+    adapter = KritaForegroundAdapter(FakeKrita(active_window=FakeWindow(active_view=view)))
+
+    assert adapter.get_foreground() is None
+
+
+def test_krita_adapter_does_not_rescale_normalized_components_above_one():
+    managed = FakeManagedColor(components=[1.2, 0.5, 0.25, 1.0])
+    view = FakeView(foreground_color=managed)
+    adapter = KritaForegroundAdapter(FakeKrita(active_window=FakeWindow(active_view=view)))
+
+    expected = color_math.srgb_to_oklab([1.0, 0.5, 0.25])
+    actual = adapter.get_foreground()
+
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_krita_adapter_returns_readback_colour_after_setting_foreground():
+    readback = FakeManagedColor(qcolor=FakeQColor(0.25, 0.5, 0.75))
+    view = FakeView(foreground_color=readback)
+    adapter = KritaForegroundAdapter(
+        FakeKrita(active_window=FakeWindow(active_view=view)),
+        managed_color_factory=FakeManagedColor,
+    )
+
+    actual = adapter.set_foreground([0.5, 0.0, 0.0])
+
+    assert len(view.set_foreground_calls) == 1
+    np.testing.assert_allclose(actual, adapter.get_foreground())
 
 
 class FakeScheduler:
@@ -219,3 +337,68 @@ class FakeWindow:
 
     def activeView(self):
         return self._active_view
+
+
+class FakeView:
+    def __init__(self, *, foreground_color):
+        self._foreground_color = foreground_color
+        self.set_foreground_calls = []
+
+    def foregroundColor(self):
+        return self._foreground_color
+
+    def setForeGroundColor(self, managed):
+        self.set_foreground_calls.append(managed)
+
+
+class FakeManagedColor:
+    def __init__(
+        self,
+        *managed_color_args,
+        components=None,
+        model="RGBA",
+        depth="U8",
+        profile="sRGB-elle-V2-srgbtrc.icc",
+        qcolor=None,
+    ):
+        self._components = components if components is not None else [0.25, 0.5, 0.75, 1.0]
+        self._model = model
+        self._depth = depth
+        self._profile = profile
+        self._qcolor = qcolor
+
+    def setComponents(self, components):
+        self._components = components
+
+    def components(self):
+        return self._components
+
+    def colorModel(self):
+        return self._model
+
+    def colorDepth(self):
+        return self._depth
+
+    def colorProfile(self):
+        return self._profile
+
+    def toQColor(self):
+        if self._qcolor is None:
+            raise AttributeError("toQColor unavailable")
+        return self._qcolor
+
+
+class FakeQColor:
+    def __init__(self, red, green, blue):
+        self._red = red
+        self._green = green
+        self._blue = blue
+
+    def redF(self):
+        return self._red
+
+    def greenF(self):
+        return self._green
+
+    def blueF(self):
+        return self._blue

@@ -44,8 +44,9 @@ class QtForegroundTimer:
 class KritaForegroundAdapter:
     """Read and write Krita's active foreground colour with null guards."""
 
-    def __init__(self, krita_instance=None) -> None:
+    def __init__(self, krita_instance=None, *, managed_color_factory=None) -> None:
         self._krita = krita_instance if krita_instance is not None else _krita_instance()
+        self._managed_color_factory = managed_color_factory
 
     def set_foreground(self, oklab: Sequence[float]) -> np.ndarray | None:
         view = self._active_view()
@@ -53,9 +54,10 @@ class KritaForegroundAdapter:
             return None
 
         srgb = color_math.clip_srgb(color_math.oklab_to_srgb(oklab))
-        managed = _managed_color_from_srgb(srgb)
+        managed = _managed_color_from_srgb(srgb, self._managed_color_factory)
         view.setForeGroundColor(managed)
-        return normalize_oklab_for_krita(oklab)
+        readback = self.get_foreground()
+        return readback if readback is not None else normalize_oklab_for_krita(oklab)
 
     def get_foreground(self) -> np.ndarray | None:
         view = self._active_view()
@@ -63,7 +65,7 @@ class KritaForegroundAdapter:
             return None
 
         foreground_color = view.foregroundColor()
-        components = _components_from_managed_color(foreground_color)
+        components = _srgb_components_from_managed_color(foreground_color)
         if components is None:
             return None
         return color_math.srgb_to_oklab(np.asarray(components[:3], dtype=float))
@@ -84,16 +86,26 @@ def _krita_instance():
     return Krita.instance()
 
 
-def _managed_color_from_srgb(srgb: Sequence[float]):
-    from krita import ManagedColor
+def _managed_color_from_srgb(srgb: Sequence[float], managed_color_factory=None):
+    if managed_color_factory is None:
+        from krita import ManagedColor
 
-    managed = ManagedColor("RGBA", "U8", "sRGB-elle-V2-srgbtrc.icc")
+        managed_color_factory = ManagedColor
+
+    managed = managed_color_factory("RGBA", "U8", "sRGB-elle-V2-srgbtrc.icc")
     managed.setComponents([float(srgb[0]), float(srgb[1]), float(srgb[2]), 1.0])
     return managed
 
 
-def _components_from_managed_color(managed_color) -> list[float] | None:
+def _srgb_components_from_managed_color(managed_color) -> list[float] | None:
     if managed_color is None:
+        return None
+
+    qcolor_components = _qcolor_srgb_components(managed_color)
+    if qcolor_components is not None:
+        return qcolor_components
+
+    if not _is_srgb_rgba_u8(managed_color):
         return None
 
     components = list(managed_color.components())
@@ -101,6 +113,33 @@ def _components_from_managed_color(managed_color) -> list[float] | None:
         return None
 
     rgb = [float(component) for component in components[:3]]
-    if max(rgb) > 1.0:
-        rgb = [component / 255.0 for component in rgb]
     return [float(np.clip(component, 0.0, 1.0)) for component in rgb]
+
+
+def _qcolor_srgb_components(managed_color) -> list[float] | None:
+    try:
+        qcolor = managed_color.toQColor()
+    except (AttributeError, TypeError, RuntimeError):
+        return None
+    if qcolor is None:
+        return None
+    try:
+        rgb = [float(qcolor.redF()), float(qcolor.greenF()), float(qcolor.blueF())]
+    except (AttributeError, TypeError, RuntimeError, ValueError):
+        return None
+    return [float(np.clip(component, 0.0, 1.0)) for component in rgb]
+
+
+def _is_srgb_rgba_u8(managed_color) -> bool:
+    try:
+        color_model = managed_color.colorModel()
+        color_depth = managed_color.colorDepth()
+        color_profile = managed_color.colorProfile()
+    except (AttributeError, TypeError, RuntimeError):
+        return False
+
+    return (
+        str(color_model).upper() == "RGBA"
+        and str(color_depth).upper() == "U8"
+        and "srgb" in str(color_profile).lower()
+    )

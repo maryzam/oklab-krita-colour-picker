@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Callable, Protocol, Sequence
 
 import numpy as np
@@ -10,6 +11,7 @@ from lab_colour_picker import color_math
 
 
 ForegroundListener = Callable[[np.ndarray], None]
+LOGGER = logging.getLogger(__name__)
 
 
 class ForegroundAdapter(Protocol):
@@ -50,6 +52,7 @@ class ColourPickerController:
         scheduler: CommitScheduler | None = None,
         foreground_timer: ForegroundTimer | None = None,
         foreground_poll_interval_ms: int = 250,
+        initially_visible: bool = True,
     ) -> None:
         self._adapter = adapter
         self._scheduler = scheduler if scheduler is not None else ImmediateScheduler()
@@ -58,13 +61,14 @@ class ColourPickerController:
         self._foreground_listeners: list[ForegroundListener] = []
         self._selected_colour: np.ndarray | None = None
         self._pending_commit: np.ndarray | None = None
+        self._selection_before_pending_commit: np.ndarray | None = None
         self._commit_scheduled = False
         self._commit_token = 0
         self._last_committed_token: int | None = None
         self._last_committed_colour: np.ndarray | None = None
-        self._dock_visible = True
+        self._dock_visible = bool(initially_visible)
 
-        if self._foreground_timer is not None:
+        if self._foreground_timer is not None and self._dock_visible:
             self._foreground_timer.start(self._foreground_poll_interval_ms, self.sync_external_foreground)
 
     @property
@@ -82,7 +86,15 @@ class ColourPickerController:
     def add_foreground_listener(self, listener: ForegroundListener) -> None:
         self._foreground_listeners.append(listener)
 
+    def remove_foreground_listener(self, listener: ForegroundListener) -> None:
+        try:
+            self._foreground_listeners.remove(listener)
+        except ValueError:
+            pass
+
     def set_preview_colour(self, oklab: Sequence[float] | None) -> None:
+        """Set transient UI preview state without replacing any pending commit."""
+
         self._selected_colour = None if oklab is None else _as_oklab(oklab)
 
     def request_foreground_commit(self, oklab: Sequence[float] | None) -> None:
@@ -90,6 +102,8 @@ class ColourPickerController:
             return
 
         colour = _as_oklab(oklab)
+        if self._pending_commit is None:
+            self._selection_before_pending_commit = None if self._selected_colour is None else self._selected_colour.copy()
         self._selected_colour = colour
         self._pending_commit = colour
         if self._commit_scheduled:
@@ -110,14 +124,18 @@ class ColourPickerController:
         normalized = normalize_oklab_for_krita(colour)
         if self._is_self_feedback(normalized):
             return False
-        if self._selected_colour is not None and _normalized_equal(normalize_oklab_for_krita(self._selected_colour), normalized):
+        selected_normalized = None if self._selected_colour is None else normalize_oklab_for_krita(self._selected_colour)
+        if selected_normalized is not None and _normalized_equal(selected_normalized, normalized):
             return False
 
         self._selected_colour = colour
         self._last_committed_token = None
         self._last_committed_colour = None
         for listener in self._foreground_listeners:
-            listener(colour.copy())
+            try:
+                listener(colour.copy())
+            except Exception:
+                LOGGER.exception("foreground listener failed")
         return True
 
     def set_dock_visible(self, visible: bool) -> None:
@@ -137,20 +155,25 @@ class ColourPickerController:
         self._commit_scheduled = False
         colour = self._pending_commit
         self._pending_commit = None
+        selection_before_commit = self._selection_before_pending_commit
+        self._selection_before_pending_commit = None
         if colour is None:
             return
 
         normalized = normalize_oklab_for_krita(colour)
         if self._last_committed_colour is not None and _normalized_equal(normalized, self._last_committed_colour):
+            self._selected_colour = colour
             return
 
         committed = self._adapter.set_foreground(colour)
         if committed is None:
+            self._selected_colour = None if selection_before_commit is None else selection_before_commit.copy()
             return
 
         self._commit_token += 1
         self._last_committed_token = self._commit_token
-        self._last_committed_colour = normalize_oklab_for_krita(committed)
+        self._last_committed_colour = _as_oklab(committed)
+        self._selected_colour = colour
 
     def _is_self_feedback(self, normalized_colour: np.ndarray) -> bool:
         return (
@@ -176,4 +199,4 @@ def _as_oklab(oklab: Sequence[float]) -> np.ndarray:
 
 
 def _normalized_equal(left: np.ndarray, right: np.ndarray) -> bool:
-    return bool(np.array_equal(normalize_oklab_for_krita(left), normalize_oklab_for_krita(right)))
+    return bool(np.array_equal(left, right))
