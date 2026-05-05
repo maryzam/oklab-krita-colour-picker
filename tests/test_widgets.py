@@ -1,0 +1,108 @@
+import math
+
+import numpy as np
+import pytest
+
+pytest.importorskip("pytestqt")
+pytest.importorskip("PyQt5")
+
+from PyQt5 import QtCore, QtGui, QtTest, QtWidgets
+
+from lab_colour_picker import color_math
+from lab_colour_picker.selector_models import HueLightnessModel, LightnessSliceModel
+from lab_colour_picker.widgets import SelectorWidget
+
+
+def test_mouse_drag_emits_previews_and_commit(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(64, 32)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    previews = []
+    commits = []
+    widget.previewed.connect(previews.append)
+    widget.committed.connect(commits.append)
+
+    start = QtCore.QPoint(8, 12)
+    end = QtCore.QPoint(24, 16)
+    QtTest.QTest.mousePress(widget, QtCore.Qt.LeftButton, pos=start)
+    QtTest.QTest.mouseMove(widget, end)
+    QtTest.QTest.mouseRelease(widget, QtCore.Qt.LeftButton, pos=end)
+
+    assert len(previews) >= 2
+    assert len(commits) == 1
+    np.testing.assert_allclose(commits[0], widget.model.color_at_position((end.x(), end.y()), (64, 32)))
+
+
+def test_invalid_release_does_not_commit(qtbot):
+    widget = SelectorWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(40, 80)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    commits = []
+    widget.committed.connect(commits.append)
+
+    invalid_corner = QtCore.QPoint(0, 0)
+    QtTest.QTest.mousePress(widget, QtCore.Qt.LeftButton, pos=invalid_corner)
+    QtTest.QTest.mouseRelease(widget, QtCore.Qt.LeftButton, pos=invalid_corner)
+
+    assert commits == []
+
+
+def test_programmatic_colour_update_blocks_widget_signals(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(64, 32)
+    qtbot.addWidget(widget)
+
+    previews = []
+    commits = []
+    widget.previewed.connect(previews.append)
+    widget.committed.connect(commits.append)
+
+    colour = widget.model.color_at_position((20, 10), (64, 32))
+    assert colour is not None
+    blocker = QtCore.QSignalBlocker(widget)
+    widget.set_selected_colour(colour)
+    del blocker
+
+    assert previews == []
+    assert commits == []
+    np.testing.assert_allclose(widget.selected_colour, colour)
+
+
+def test_indicator_position_comes_from_model(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=math.pi / 3.0))
+    widget.resize(100, 50)
+    qtbot.addWidget(widget)
+
+    colour = color_math.oklch_to_oklab([0.25, 0.02, math.pi / 3.0])
+    widget.set_selected_colour(colour)
+
+    expected = widget.model.position_for_color(colour, (100, 50))
+    assert expected is not None
+    assert widget.indicator_position() == pytest.approx(expected)
+
+
+def test_paint_event_renders_selector_image(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(32, 24)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    image = QtGui.QImage(widget.size(), QtGui.QImage.Format_RGBA8888)
+    image.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(image)
+    widget.render(painter)
+    painter.end()
+
+    nontransparent = False
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if QtGui.QColor(image.pixel(x, y)).alpha() != 0:
+                nontransparent = True
+                break
+        if nontransparent:
+            break
+    assert nontransparent
