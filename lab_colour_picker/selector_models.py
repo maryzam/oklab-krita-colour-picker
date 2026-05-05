@@ -1,9 +1,15 @@
-"""Pure coordinate models for OKLab selector surfaces."""
+"""Pure coordinate models for OKLab selector surfaces.
+
+These scalar models are for pointer interaction and indicator placement.
+Renderers should call the vectorized colour-math helpers on coordinate grids
+instead of looping over these per-position methods.
+"""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 
@@ -11,9 +17,13 @@ from lab_colour_picker import color_math
 
 
 POSITION_EPSILON = 1e-12
-HUE_EPSILON = 1e-9
+AB_EPSILON = 1e-9
 CHROMA_EPSILON = 1e-9
 LIGHTNESS_EPSILON = 1e-9
+CHROMA_LIGHTNESS_RING_EPSILON = 1e-9
+
+Position = tuple[float, float]
+Size = tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -22,7 +32,10 @@ class LightnessSliceModel:
 
     lightness: float
 
-    def color_at_position(self, position, size):
+    def __post_init__(self) -> None:
+        _validate_lightness(self.lightness)
+
+    def color_at_position(self, position: Sequence[float], size: Sequence[float]) -> np.ndarray | None:
         geometry = _circle_geometry(position, size)
         if geometry is None:
             return None
@@ -32,7 +45,7 @@ class LightnessSliceModel:
         chroma = normalized_radius * max_chroma
         return color_math.oklch_to_oklab([self.lightness, chroma, hue])
 
-    def position_for_color(self, oklab, size):
+    def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
         if abs(lightness - self.lightness) > LIGHTNESS_EPSILON:
             return None
@@ -54,7 +67,11 @@ class HueLightnessModel:
 
     hue: float
 
-    def color_at_position(self, position, size):
+    def __post_init__(self) -> None:
+        _validate_hue(self.hue)
+        object.__setattr__(self, "hue", self.hue % math.tau)
+
+    def color_at_position(self, position: Sequence[float], size: Sequence[float]) -> np.ndarray | None:
         bounds = _position_in_bounds(position, size)
         if bounds is None:
             return None
@@ -63,20 +80,20 @@ class HueLightnessModel:
         lightness = 1.0 - y / (height - 1.0)
         chroma_fraction = x / (width - 1.0)
         max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
-        if max_chroma <= CHROMA_EPSILON and chroma_fraction > CHROMA_EPSILON:
-            return None
+        if max_chroma <= CHROMA_EPSILON:
+            return color_math.oklch_to_oklab([lightness, 0.0, self.hue])
         return color_math.oklch_to_oklab([lightness, chroma_fraction * max_chroma, self.hue])
 
-    def position_for_color(self, oklab, size):
+    def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         bounds = _size_bounds(size)
         if bounds is None:
             return None
 
         width, height = bounds
-        lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
+        lightness, chroma, _ = color_math.oklab_to_oklch(oklab)
         if not -LIGHTNESS_EPSILON <= lightness <= 1.0 + LIGHTNESS_EPSILON:
             return None
-        if chroma > CHROMA_EPSILON and not _same_hue(hue, self.hue):
+        if not _on_hue_plane(oklab, self.hue):
             return None
 
         lightness = float(np.clip(lightness, 0.0, 1.0))
@@ -101,17 +118,23 @@ class ChromaLightnessModel:
     lightness: float
     chroma: float
 
-    def color_at_position(self, position, size):
+    def __post_init__(self) -> None:
+        _validate_lightness(self.lightness)
+        _validate_chroma(self.chroma)
+
+    def color_at_position(self, position: Sequence[float], size: Sequence[float]) -> np.ndarray | None:
         geometry = _circle_geometry(position, size)
         if geometry is None:
             return None
 
-        _, hue, _, _ = geometry
+        normalized_radius, hue, _, _ = geometry
+        if normalized_radius < 1.0 - CHROMA_LIGHTNESS_RING_EPSILON:
+            return None
         if self.chroma > color_math.max_chroma_for_lh(self.lightness, hue) + CHROMA_EPSILON:
             return None
         return color_math.oklch_to_oklab([self.lightness, self.chroma, hue])
 
-    def position_for_color(self, oklab, size):
+    def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
         if abs(lightness - self.lightness) > LIGHTNESS_EPSILON:
             return None
@@ -122,7 +145,7 @@ class ChromaLightnessModel:
         return _position_from_circle(1.0, hue, size)
 
 
-def _circle_geometry(position, size):
+def _circle_geometry(position: Sequence[float], size: Sequence[float]):
     bounds = _position_in_bounds(position, size)
     if bounds is None:
         return None
@@ -144,7 +167,7 @@ def _circle_geometry(position, size):
     return min(distance / radius, 1.0), hue, center_x, center_y
 
 
-def _position_from_circle(normalized_radius, hue, size):
+def _position_from_circle(normalized_radius: float, hue: float, size: Sequence[float]) -> Position | None:
     bounds = _size_bounds(size)
     if bounds is None:
         return None
@@ -163,7 +186,7 @@ def _position_from_circle(normalized_radius, hue, size):
     )
 
 
-def _position_in_bounds(position, size):
+def _position_in_bounds(position: Sequence[float], size: Sequence[float]):
     bounds = _size_bounds(size)
     if bounds is None:
         return None
@@ -175,13 +198,29 @@ def _position_in_bounds(position, size):
     return x, y, width, height
 
 
-def _size_bounds(size):
+def _size_bounds(size: Sequence[float]):
     width, height = (float(size[0]), float(size[1]))
     if width <= 1.0 or height <= 1.0:
         return None
     return width, height
 
 
-def _same_hue(left, right):
-    delta = abs((left - right + math.pi) % math.tau - math.pi)
-    return delta <= HUE_EPSILON
+def _on_hue_plane(oklab: Sequence[float], hue: float) -> bool:
+    a = float(oklab[1])
+    b = float(oklab[2])
+    return abs(a * math.sin(hue) - b * math.cos(hue)) <= AB_EPSILON
+
+
+def _validate_lightness(lightness: float) -> None:
+    if not math.isfinite(lightness) or not 0.0 <= lightness <= 1.0:
+        raise ValueError("lightness must be finite and in [0, 1]")
+
+
+def _validate_chroma(chroma: float) -> None:
+    if not math.isfinite(chroma) or chroma < 0.0:
+        raise ValueError("chroma must be finite and non-negative")
+
+
+def _validate_hue(hue: float) -> None:
+    if not math.isfinite(hue):
+        raise ValueError("hue must be finite")
