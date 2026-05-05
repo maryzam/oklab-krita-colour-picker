@@ -6,12 +6,18 @@ from functools import lru_cache
 from typing import Protocol, Sequence
 
 import numpy as np
+import numpy.typing as npt
 
 from lab_colour_picker import color_math
 
 
 class VectorizedSelectorModel(Protocol):
-    def colors_at_positions(self, x, y, size: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
         ...
 
 
@@ -19,19 +25,19 @@ def render_rgba(model: VectorizedSelectorModel, size: Sequence[int]) -> np.ndarr
     """Render ``model`` to a ``(height, width, 4)`` uint8 RGBA buffer."""
 
     width, height = _validate_size(size)
-    oklab, selectable = _selector_colors(model, width, height)
+    return _render_rgba_cached(model, width, height).copy()
 
+
+@lru_cache(maxsize=16)
+def _render_rgba_cached(model: VectorizedSelectorModel, width: int, height: int) -> np.ndarray:
+    x, y = _pixel_grid(width, height)
+    oklab, selectable = model.colors_at_positions(x, y, (width, height))
     rgb = _quantize_srgb8(oklab)
     rgba = np.zeros((height, width, 4), dtype=np.uint8)
     rgba[..., :3] = rgb
     rgba[..., 3] = np.where(selectable, 255, 0).astype(np.uint8)
+    rgba.setflags(write=False)
     return rgba
-
-
-@lru_cache(maxsize=32)
-def _selector_colors(model: VectorizedSelectorModel, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
-    x, y = _pixel_grid(width, height)
-    return model.colors_at_positions(x, y, (width, height))
 
 
 def _quantize_srgb8(oklab) -> np.ndarray:

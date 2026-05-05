@@ -27,6 +27,22 @@ def test_renderers_return_uint8_rgba_buffers(model):
     assert actual.dtype == np.uint8
 
 
+@pytest.mark.parametrize("size", [(1, 10), (10, 1)])
+def test_renderers_reject_degenerate_sizes(size):
+    with pytest.raises(ValueError, match="at least 2x2"):
+        render_rgba(LightnessSliceModel(lightness=0.55), size)
+
+
+def test_render_rgba_returns_mutable_copy_without_corrupting_cache():
+    model = LightnessSliceModel(lightness=0.55)
+    original = render_rgba(model, (17, 17))
+
+    original[:, :, :] = 0
+    actual = render_rgba(model, (17, 17))
+
+    assert np.count_nonzero(actual[..., 3]) > 0
+
+
 @pytest.mark.parametrize(
     ("model", "size", "probes"),
     [
@@ -80,12 +96,13 @@ def test_hue_lightness_renderer_alpha_matches_selectable_area():
 
 
 def test_chroma_lightness_renderer_masks_out_interior_and_out_of_gamut_hues():
-    chroma = color_math.max_chroma_for_lh(0.55, 0.0) * 0.35
+    chroma = 0.15
     model = ChromaLightnessModel(lightness=0.55, chroma=chroma)
-    rgba = render_rgba(model, (33, 33))
+    rgba = render_rgba(model, (101, 101))
 
-    assert rgba[16, 16, 3] == 0
-    assert rgba[16, 32, 3] == 255
+    assert rgba[50, 50, 3] == 0
+    assert rgba[50, 100, 3] == 255
+    assert rgba[50, 0, 3] == 0
 
 
 def test_chroma_lightness_renderer_has_visible_ring_at_even_sizes():

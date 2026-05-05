@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
+import numpy.typing as npt
 
 from lab_colour_picker import color_math
 
@@ -45,7 +46,12 @@ class LightnessSliceModel:
         chroma = normalized_radius * max_chroma
         return color_math.oklch_to_oklab([self.lightness, chroma, hue])
 
-    def colors_at_positions(self, x, y, size: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
         geometry = _circle_geometry_arrays(x, y, size)
         if geometry is None:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
@@ -101,7 +107,12 @@ class HueLightnessModel:
             return color_math.oklch_to_oklab([lightness, 0.0, self.hue])
         return color_math.oklch_to_oklab([lightness, chroma_fraction * max_chroma, self.hue])
 
-    def colors_at_positions(self, x, y, size: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
         bounds = _position_in_bounds_arrays(x, y, size)
         if bounds is None:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
@@ -172,7 +183,12 @@ class ChromaLightnessModel:
             return None
         return color_math.oklch_to_oklab([self.lightness, self.chroma, hue])
 
-    def colors_at_positions(self, x, y, size: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
         geometry = _circle_geometry_arrays(x, y, size)
         if geometry is None:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
@@ -303,8 +319,6 @@ def _radius_for_size(size: Sequence[float]) -> float:
 
 
 def _on_chroma_lightness_ring(normalized_radius, radius):
-    if radius <= 0.0:
-        return False
     return normalized_radius >= max(0.0, 1.0 - CHROMA_LIGHTNESS_RING_HALF_WIDTH / radius)
 
 
