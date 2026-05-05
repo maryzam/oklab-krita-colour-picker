@@ -319,6 +319,7 @@ def _radius_for_size(size: Sequence[float]) -> float:
 
 
 def _on_chroma_lightness_ring(normalized_radius, radius):
+    assert radius > 0.0
     return normalized_radius >= max(0.0, 1.0 - CHROMA_LIGHTNESS_RING_HALF_WIDTH / radius)
 
 

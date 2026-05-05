@@ -1,6 +1,8 @@
 import statistics
 import time
 
+import pytest
+
 from lab_colour_picker import color_math
 from lab_colour_picker.renderers import render_rgba
 from lab_colour_picker.selector_models import (
@@ -11,8 +13,10 @@ from lab_colour_picker.selector_models import (
 
 
 PERFORMANCE_BUDGET_SECONDS = 0.005
+SAMPLE_COUNT = 21
 
 
+@pytest.mark.perf
 def test_256_renderers_meet_median_budget():
     chroma = color_math.max_chroma_for_lh(0.55, 0.0) * 0.35
     cases = [
@@ -24,7 +28,7 @@ def test_256_renderers_meet_median_budget():
     for model in cases:
         render_rgba(model, (256, 256))
         timings = []
-        for _ in range(9):
+        for _ in range(SAMPLE_COUNT):
             start = time.perf_counter()
             render_rgba(model, (256, 256))
             timings.append(time.perf_counter() - start)
