@@ -21,7 +21,7 @@ def test_install_numpy_invokes_krita_python_with_target_and_upgrade(tmp_path, mo
         return _completed(args, returncode=0, stdout="ok")
 
     monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: KRITA_PYTHON)
-    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available", lambda _python: True)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_subprocess", lambda _python: True)
     monkeypatch.setattr(dependency_bootstrap.subprocess, "run", fake_run)
 
     result = dependency_bootstrap.install_numpy(str(tmp_path))
@@ -50,13 +50,52 @@ def test_install_numpy_invokes_krita_python_with_target_and_upgrade(tmp_path, mo
     ]
 
 
-def test_install_numpy_returns_failure_when_krita_python_not_found(tmp_path, monkeypatch):
+def test_install_numpy_falls_back_to_in_process_when_no_python_executable(tmp_path, monkeypatch):
     monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: None)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_in_process", lambda: True)
+
+    captured = []
+    monkeypatch.setattr(
+        dependency_bootstrap,
+        "_run_pip_in_process",
+        lambda argv: captured.append(argv) or 0,
+    )
+
+    result = dependency_bootstrap.install_numpy(str(tmp_path))
+
+    assert result.success is True
+    assert captured == [
+        [
+            "pip",
+            "install",
+            "--upgrade",
+            "--only-binary=:all:",
+            "--target",
+            str(tmp_path),
+            dependency_bootstrap.NUMPY_REQUIREMENT,
+        ]
+    ]
+
+
+def test_install_numpy_in_process_reports_pip_exit_code(tmp_path, monkeypatch):
+    monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: None)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_in_process", lambda: True)
+    monkeypatch.setattr(dependency_bootstrap, "_run_pip_in_process", lambda _argv: 2)
 
     result = dependency_bootstrap.install_numpy(str(tmp_path))
 
     assert result.success is False
-    assert "Krita's Python" in result.message
+    assert "status 2" in result.message
+
+
+def test_install_numpy_in_process_reports_missing_pip(tmp_path, monkeypatch):
+    monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: None)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_in_process", lambda: False)
+
+    result = dependency_bootstrap.install_numpy(str(tmp_path))
+
+    assert result.success is False
+    assert "ensurepip" in result.message
 
 
 def test_install_numpy_surfaces_pip_stderr_on_failure(tmp_path, monkeypatch):
@@ -64,7 +103,7 @@ def test_install_numpy_surfaces_pip_stderr_on_failure(tmp_path, monkeypatch):
         return _completed(args, returncode=1, stderr="ERROR: no matching wheel")
 
     monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: KRITA_PYTHON)
-    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available", lambda _python: True)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_subprocess", lambda _python: True)
     monkeypatch.setattr(dependency_bootstrap.subprocess, "run", fake_run)
 
     result = dependency_bootstrap.install_numpy(str(tmp_path))
@@ -78,7 +117,7 @@ def test_install_numpy_reports_timeout(tmp_path, monkeypatch):
         raise subprocess.TimeoutExpired(args, kwargs.get("timeout", 0))
 
     monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: KRITA_PYTHON)
-    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available", lambda _python: True)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_subprocess", lambda _python: True)
     monkeypatch.setattr(dependency_bootstrap.subprocess, "run", fake_run)
 
     result = dependency_bootstrap.install_numpy(str(tmp_path))
@@ -89,7 +128,7 @@ def test_install_numpy_reports_timeout(tmp_path, monkeypatch):
 
 def test_install_numpy_aborts_when_pip_cannot_be_bootstrapped(tmp_path, monkeypatch):
     monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: KRITA_PYTHON)
-    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available", lambda _python: False)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_subprocess", lambda _python: False)
 
     result = dependency_bootstrap.install_numpy(str(tmp_path))
 
@@ -97,7 +136,7 @@ def test_install_numpy_aborts_when_pip_cannot_be_bootstrapped(tmp_path, monkeypa
     assert "ensurepip" in result.message
 
 
-def test_ensure_pip_available_short_circuits_when_pip_imports(monkeypatch):
+def test_ensure_pip_available_subprocess_short_circuits_when_pip_imports(monkeypatch):
     calls = []
 
     def fake_run(args, **kwargs):
@@ -106,12 +145,12 @@ def test_ensure_pip_available_short_circuits_when_pip_imports(monkeypatch):
 
     monkeypatch.setattr(dependency_bootstrap.subprocess, "run", fake_run)
 
-    assert dependency_bootstrap._ensure_pip_available(KRITA_PYTHON) is True
+    assert dependency_bootstrap._ensure_pip_available_subprocess(KRITA_PYTHON) is True
     assert len(calls) == 1
     assert calls[0][1:] == ["-c", "import pip"]
 
 
-def test_ensure_pip_available_runs_ensurepip_when_pip_missing(monkeypatch):
+def test_ensure_pip_available_subprocess_runs_ensurepip_when_pip_missing(monkeypatch):
     calls = []
 
     def fake_run(args, **kwargs):
@@ -124,7 +163,7 @@ def test_ensure_pip_available_runs_ensurepip_when_pip_missing(monkeypatch):
 
     monkeypatch.setattr(dependency_bootstrap.subprocess, "run", fake_run)
 
-    assert dependency_bootstrap._ensure_pip_available(KRITA_PYTHON) is True
+    assert dependency_bootstrap._ensure_pip_available_subprocess(KRITA_PYTHON) is True
     assert any("ensurepip" in args for args in calls)
 
 
