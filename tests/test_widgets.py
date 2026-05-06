@@ -146,7 +146,7 @@ def test_keyboard_step_at_boundary_keeps_event_handled(qtbot):
     qtbot.addWidget(widget)
     widget.show()
 
-    start = widget.model.color_at_position((39, 40), _size(widget))
+    start = widget.model.color_at_position((38, 40), _size(widget))
     assert start is not None
     widget.set_selected_colour(start)
 
