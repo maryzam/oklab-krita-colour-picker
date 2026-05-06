@@ -32,7 +32,9 @@ Installing NumPy into Krita's Python:
   from a Command Prompt:
   ```
   "C:\Program Files\Krita (x64)\bin\python.exe" -m pip install ^
-    --target "%APPDATA%\krita\oklab_colour_picker\site-packages" numpy
+    --upgrade --only-binary=:all: ^
+    --target "%APPDATA%\krita\oklab_colour_picker\site-packages" ^
+    "numpy>=1.26,<3"
   ```
 - **macOS** — Krita's bundled Python lives inside the app bundle. From a
   Terminal:

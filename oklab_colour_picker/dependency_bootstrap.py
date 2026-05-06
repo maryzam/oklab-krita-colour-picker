@@ -25,7 +25,13 @@ def install_numpy(vendor_path: str, *, requirement: str = NUMPY_REQUIREMENT) -> 
 
     python = find_krita_python()
     if python is not None:
-        return _install_via_subprocess(python, vendor_path, requirement)
+        subprocess_result = _install_via_subprocess(python, vendor_path, requirement)
+        if subprocess_result is not None:
+            return subprocess_result
+        # The interpreter or pip bootstrap is unusable; let the in-process
+        # path try. We only fall through on infrastructure failures, never on
+        # genuine pip install failures (e.g. "no matching wheel"), since
+        # retrying those in-process would just repeat the same error.
     return _install_in_process(vendor_path, requirement)
 
 
@@ -60,14 +66,19 @@ def find_krita_python() -> str | None:
     return None
 
 
-def _install_via_subprocess(python: str, vendor_path: str, requirement: str) -> InstallResult:
-    try:
-        if not _ensure_pip_available_subprocess(python):
-            return InstallResult(
-                False,
-                f"pip is unavailable in {python} and `ensurepip` did not bootstrap it.",
-            )
+def _install_via_subprocess(python: str, vendor_path: str, requirement: str) -> InstallResult | None:
+    """Run pip via the discovered interpreter.
 
+    Returns ``None`` when the interpreter or pip bootstrap cannot be exercised
+    (interpreter not runnable, ensurepip fails) so the caller can fall back to
+    in-process pip. Returns an ``InstallResult`` for any actual pip-install
+    outcome — success, timeout, or a normal pip failure such as
+    "no matching wheel" — since retrying those in-process would recur.
+    """
+    if not _ensure_pip_available_subprocess(python):
+        return None
+
+    try:
         completed = subprocess.run(
             [python, "-m", "pip", *_pip_install_args(vendor_path, requirement)],
             check=False,
@@ -77,8 +88,8 @@ def _install_via_subprocess(python: str, vendor_path: str, requirement: str) -> 
         )
     except subprocess.TimeoutExpired:
         return InstallResult(False, "pip install timed out. Check your network connection and retry.")
-    except OSError as exc:
-        return InstallResult(False, f"Could not run {python}: {exc}")
+    except OSError:
+        return None
 
     if completed.returncode == 0:
         return InstallResult(True, "NumPy installed. Restart Krita to load the colour selector.")

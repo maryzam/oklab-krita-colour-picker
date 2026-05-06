@@ -126,14 +126,45 @@ def test_install_numpy_reports_timeout(tmp_path, monkeypatch):
     assert "timed out" in result.message.lower()
 
 
-def test_install_numpy_aborts_when_pip_cannot_be_bootstrapped(tmp_path, monkeypatch):
+def test_install_numpy_falls_through_when_subprocess_pip_bootstrap_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: KRITA_PYTHON)
     monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_subprocess", lambda _python: False)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_in_process", lambda: True)
+
+    captured = []
+    monkeypatch.setattr(
+        dependency_bootstrap,
+        "_run_pip_in_process",
+        lambda argv: captured.append(argv) or 0,
+    )
+
+    result = dependency_bootstrap.install_numpy(str(tmp_path))
+
+    assert result.success is True
+    assert captured and captured[0][0] == "pip"
+
+
+def test_install_numpy_does_not_retry_in_process_after_pip_install_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(dependency_bootstrap, "find_krita_python", lambda: KRITA_PYTHON)
+    monkeypatch.setattr(dependency_bootstrap, "_ensure_pip_available_subprocess", lambda _python: True)
+    monkeypatch.setattr(
+        dependency_bootstrap.subprocess,
+        "run",
+        lambda args, **kwargs: _completed(args, returncode=1, stderr="ERROR: no matching wheel"),
+    )
+
+    in_process_called = []
+    monkeypatch.setattr(
+        dependency_bootstrap,
+        "_install_in_process",
+        lambda *args, **kwargs: in_process_called.append(args) or dependency_bootstrap.InstallResult(True, "unexpected"),
+    )
 
     result = dependency_bootstrap.install_numpy(str(tmp_path))
 
     assert result.success is False
-    assert "ensurepip" in result.message
+    assert "no matching wheel" in result.message
+    assert in_process_called == []
 
 
 def test_ensure_pip_available_subprocess_short_circuits_when_pip_imports(monkeypatch):
