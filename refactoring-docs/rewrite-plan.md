@@ -18,13 +18,13 @@ A strangler-fig refactor would normally be the lower-risk path, but it pays off 
 
 Concrete approach:
 
-The entire original plugin implementation has been moved under `legacy-plugin/lab_colour_picker/` folder. The `legacy-plugin` folder also contains original author README and some other artifacts. Treat this folder as readonly. Avoid modifying it or reference any of its content outside the `legacy-plugin` or `refactoring-docs`.
+The entire original plugin implementation has been moved under `legacy-plugin/oklab_colour_picker/` folder. The `legacy-plugin` folder also contains original author README and some other artifacts. Treat this folder as readonly. Avoid modifying it or reference any of its content outside the `legacy-plugin` or `refactoring-docs`.
 
 Keep behaviour unchanged, but allow the minimal packaging edits required to
 make it load as a separate Krita plugin: distinct desktop file,`X-KDE-Library`, Python package path, dock factory id, and dock title (e.g.
 "OKLab Colour Selector (legacy)").
 
-Build the rewrite version under `lab_colour_picker/` from empty.
+Build the rewrite version under `oklab_colour_picker/` from empty.
 
 Both plugins remain installable simultaneously throughout the rewrite, which enables side-by-side exploratory testing in real Krita: same foreground colour, two pickers, immediate visual comparison of latency, gamut handling,indicator placement, and feel.
 
@@ -574,7 +574,7 @@ Do not carry forward:
 
 - `b_tree.py` (replaced by Ottosson's analytic gamut-boundary helpers and,
   only if useful, a disposable flat cache).
-- The single-file `lab_colour_picker.py` legacy module (already dead in
+- The single-file `oklab_colour_picker.py` legacy module (already dead in
   `__init__.py`).
 - Broad `disconnect()` signal patterns (replaced by `QSignalBlocker`).
 - Image-sampling selection logic (replaced by model-driven picking).

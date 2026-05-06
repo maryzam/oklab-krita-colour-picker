@@ -4,14 +4,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 KRITA_IMPORT_ALLOWED = {
-    Path("lab_colour_picker/plugin.py"),
-    Path("lab_colour_picker/controller.py"),
-    Path("lab_colour_picker/krita_adapter.py"),
+    Path("oklab_colour_picker/plugin.py"),
+    Path("oklab_colour_picker/controller.py"),
+    Path("oklab_colour_picker/krita_adapter.py"),
 }
 PURE_NO_QT_OR_KRITA = {
-    Path("lab_colour_picker/color_math.py"),
-    Path("lab_colour_picker/renderers.py"),
-    Path("lab_colour_picker/selector_models.py"),
+    Path("oklab_colour_picker/color_math.py"),
+    Path("oklab_colour_picker/renderers.py"),
+    Path("oklab_colour_picker/selector_models.py"),
 }
 
 
@@ -27,7 +27,7 @@ def test_krita_imports_are_limited_to_boundary_files():
 
 def test_widgets_do_not_import_krita():
     offenders = []
-    widgets_dir = ROOT / "lab_colour_picker" / "widgets"
+    widgets_dir = ROOT / "oklab_colour_picker" / "widgets"
     assert widgets_dir.exists()
 
     for full_path in sorted(widgets_dir.rglob("*.py")):
@@ -55,7 +55,7 @@ def test_pure_color_math_has_no_qt_or_krita_imports():
 
 
 def _project_python_asts():
-    for full_path in sorted((ROOT / "lab_colour_picker").rglob("*.py")):
+    for full_path in sorted((ROOT / "oklab_colour_picker").rglob("*.py")):
         path = full_path.relative_to(ROOT)
         yield path, ast.parse(full_path.read_text(), filename=path.as_posix())
 

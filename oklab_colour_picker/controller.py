@@ -7,7 +7,7 @@ from typing import Callable, Protocol, Sequence
 
 import numpy as np
 
-from lab_colour_picker import color_math
+from oklab_colour_picker import color_math
 
 
 ForegroundListener = Callable[[np.ndarray], None]

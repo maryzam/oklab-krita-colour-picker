@@ -9,9 +9,9 @@ from typing import Callable, Protocol, Sequence
 import numpy as np
 from PyQt5 import QtWidgets
 
-from lab_colour_picker import color_math
-from lab_colour_picker.selector_models import ChromaLightnessModel, HueLightnessModel, LightnessSliceModel
-from lab_colour_picker.widgets import SelectorWidget
+from oklab_colour_picker import color_math
+from oklab_colour_picker.selector_models import ChromaLightnessModel, HueLightnessModel, LightnessSliceModel
+from oklab_colour_picker.widgets import SelectorWidget
 
 
 ForegroundListener = Callable[[Sequence[float]], None]

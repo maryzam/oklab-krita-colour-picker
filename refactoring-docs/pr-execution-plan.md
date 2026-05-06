@@ -32,10 +32,10 @@ Verification: dev checks pass locally and in GitHub Actions.
 Branch: `rewrite/01-color-math`
 
 Scope: create the test harness and implement pure OKLab, OKLCh, sRGB, gamut,
-and analytic max-chroma helpers in `lab_colour_picker/color_math.py`. Add the
+and analytic max-chroma helpers in `oklab_colour_picker/color_math.py`. Add the
 initial import-discipline pytest scan in this PR.
 
-Expected files: `lab_colour_picker/color_math.py`, package skeleton files,
+Expected files: `oklab_colour_picker/color_math.py`, package skeleton files,
 `tests/` color-math tests, import-discipline tests, and minimal project test
 configuration. Establish `requirements-dev.txt` as the dev/test dependency
 file and add NumPy and pytest there.
@@ -57,7 +57,7 @@ Scope: implement pure selector coordinate models that convert positions to
 colors and colors back to positions. Invalid or out-of-gamut positions return
 `None`.
 
-Expected files: `lab_colour_picker/selector_models.py` and focused model
+Expected files: `oklab_colour_picker/selector_models.py` and focused model
 tests. Extend the import-discipline tests from PR 1 so `selector_models.py` is
 also enforced as Qt-free and Krita-free.
 
@@ -76,7 +76,7 @@ Branch: `rewrite/03-renderers`
 Scope: implement NumPy-backed renderers that produce RGBA buffers from selector
 models without per-pixel Python loops.
 
-Expected files: `lab_colour_picker/renderers.py`, renderer tests, and
+Expected files: `oklab_colour_picker/renderers.py`, renderer tests, and
 `tests/perf/` performance benchmark tests or scripts wired into the normal
 pytest/dev-check path.
 
@@ -98,8 +98,8 @@ adapter boundaries, coalesced foreground commits, null guards, and
 self-feedback suppression using the commit-token plus normalized-colour match
 policy.
 
-Expected files: `lab_colour_picker/controller.py`,
-`lab_colour_picker/krita_adapter.py` if separated, and controller tests.
+Expected files: `oklab_colour_picker/controller.py`,
+`oklab_colour_picker/krita_adapter.py` if separated, and controller tests.
 
 Out of scope: selector widget UI, renderer implementation, and plugin dock
 registration beyond adapter interfaces needed for tests.
@@ -116,7 +116,7 @@ Branch: `rewrite/05-widgets`
 Scope: implement Qt presentation and interaction widgets that paint selector
 images, draw indicators, handle input, and emit typed preview/commit signals.
 
-Expected files: `lab_colour_picker/widgets/` modules and widget tests using
+Expected files: `oklab_colour_picker/widgets/` modules and widget tests using
 `pytest-qt` where practical. Add `pytest-qt` to declared dev dependencies in
 the same requirements/config location established by PR 1.
 
@@ -136,7 +136,7 @@ resizable layout, mode switching, and `QDockWidget.visibilityChanged` into a
 loadable Krita plugin. The visibility signal wiring connects the real dock to
 the controller behavior already tested with fakes in PR 4.
 
-Expected files: `lab_colour_picker/plugin.py`, dock/layout modules, desktop
+Expected files: `oklab_colour_picker/plugin.py`, dock/layout modules, desktop
 plugin metadata, and integration-level tests that can run outside Krita where
 possible.
 

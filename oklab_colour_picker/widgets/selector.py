@@ -7,7 +7,7 @@ from typing import Protocol, Sequence
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from lab_colour_picker import renderers
+from oklab_colour_picker import renderers
 
 
 class SelectorModel(Protocol):

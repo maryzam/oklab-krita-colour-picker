@@ -10,9 +10,9 @@ ordered by rewrite slice.
   not track it, import it, or copy modules from it.
 - `refactoring-docs/` is tracked and should stay current when the dev loop
   changes.
-- Only `lab_colour_picker/plugin.py`, `lab_colour_picker/controller.py`, or
-  `lab_colour_picker/krita_adapter.py` may import Krita.
-- `lab_colour_picker/color_math.py` and `lab_colour_picker/selector_models.py`
+- Only `oklab_colour_picker/plugin.py`, `oklab_colour_picker/controller.py`, or
+  `oklab_colour_picker/krita_adapter.py` may import Krita.
+- `oklab_colour_picker/color_math.py` and `oklab_colour_picker/selector_models.py`
   must stay free of Qt and Krita imports.
 - Widgets must not call `setForeGroundColor`; Krita writes belong behind the
   controller/Krita adapter boundary.
