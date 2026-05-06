@@ -1,4 +1,5 @@
 import math
+import sys
 
 import numpy as np
 import pytest
@@ -12,6 +13,7 @@ import oklab_colour_picker
 from oklab_colour_picker import color_math
 from oklab_colour_picker.dock import ColourPickerDockPanel, SelectorMode, connect_dock_visibility
 from oklab_colour_picker.plugin import DOCK_FACTORY_ID, DOCK_TITLE, create_dock_widget_class, register_plugin
+import oklab_colour_picker.plugin as plugin_module
 
 
 def test_dock_panel_constructs_all_selector_views_and_switches_modes(qtbot):
@@ -141,6 +143,25 @@ def test_plugin_registers_krita_dock_factory():
     assert factory.area == FakeDockWidgetFactoryBase.DockRight
 
 
+def test_vendor_site_packages_are_added_before_runtime_imports(tmp_path, monkeypatch):
+    vendor_dir = tmp_path / plugin_module.VENDOR_ROOT_DIRECTORY_NAME / plugin_module.VENDOR_SITE_PACKAGES_DIRECTORY_NAME
+    vendor_dir.mkdir(parents=True)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+
+    plugin_module._add_vendor_site_packages(str(tmp_path))
+
+    assert sys.path[0] == str(vendor_dir)
+
+
+def test_vendor_site_packages_fall_back_next_to_plugin_package(tmp_path, monkeypatch):
+    package_dir = tmp_path / "pykrita" / "oklab_colour_picker"
+    package_dir.mkdir(parents=True)
+    expected = package_dir / plugin_module.VENDOR_SITE_PACKAGES_DIRECTORY_NAME
+    monkeypatch.setattr(plugin_module, "__file__", str(package_dir / "plugin.py"))
+
+    assert plugin_module._vendor_site_packages_path() == str(expected)
+
+
 def test_created_krita_dock_builds_panel_and_wires_visibility(qtbot):
     controller = FakeController()
     dock_class = create_dock_widget_class(FakeDockWidget, controller_factory=lambda: controller)
@@ -155,7 +176,6 @@ def test_created_krita_dock_builds_panel_and_wires_visibility(qtbot):
 
 
 def test_dock_shows_friendly_message_when_numpy_is_missing(qtbot, monkeypatch):
-    import sys
     import types
 
     fake_dock = types.ModuleType("oklab_colour_picker.dock")
@@ -171,9 +191,37 @@ def test_dock_shows_friendly_message_when_numpy_is_missing(qtbot, monkeypatch):
     qtbot.addWidget(dock)
 
     widget = dock.widget()
-    assert isinstance(widget, QtWidgets.QLabel)
+    assert isinstance(widget, QtWidgets.QWidget)
     assert widget.objectName() == "oklab-missing-dependency"
-    assert "numpy" in widget.text().lower()
+    assert "numpy" in widget.findChild(QtWidgets.QLabel).text().lower()
+    assert widget.findChild(QtWidgets.QPushButton, "oklab-install-numpy").text() == "Install NumPy"
+
+
+def test_install_numpy_action_requires_confirmation(qtbot, monkeypatch, tmp_path):
+    import types
+
+    fake_dock = types.ModuleType("oklab_colour_picker.dock")
+
+    def _raise_numpy_missing(_name):
+        raise ModuleNotFoundError("No module named 'numpy'", name="numpy")
+
+    fake_dock.__getattr__ = _raise_numpy_missing
+    monkeypatch.setitem(sys.modules, "oklab_colour_picker.dock", fake_dock)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *args, **kwargs: QtWidgets.QMessageBox.No)
+    installer_calls = []
+
+    dock_class = create_dock_widget_class(
+        FakeDockWidget,
+        app_data_location=str(tmp_path),
+        dependency_installer=lambda vendor_path: installer_calls.append(vendor_path),
+    )
+    dock = dock_class()
+    qtbot.addWidget(dock)
+
+    button = dock.widget().findChild(QtWidgets.QPushButton, "oklab-install-numpy")
+    qtbot.mouseClick(button, QtCore.Qt.LeftButton)
+
+    assert installer_calls == []
 
 
 def test_dock_propagates_unexpected_import_errors(qtbot, monkeypatch):
@@ -235,6 +283,9 @@ class FakeKritaApp:
 
     def addDockWidgetFactory(self, factory):
         self.factories.append(factory)
+
+    def getAppDataLocation(self):
+        return "/tmp/fake-krita-app-data"
 
 
 class FakeDockWidgetFactoryBase:

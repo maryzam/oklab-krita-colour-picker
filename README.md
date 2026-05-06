@@ -14,20 +14,29 @@ The plugin lives in `oklab_colour_picker/`, with the Krita manifest at
 ### Prerequisites
 
 - Krita 5.2 or newer (Python plugin support, PyQt5).
-- **NumPy** in the Python interpreter Krita uses. Krita's bundled Python on
-  Windows and macOS does not ship NumPy. If NumPy is missing the docker will
-  load with a friendly placeholder message instead of the colour selector.
+- **NumPy** available to Krita's Python. Krita's bundled Python on Windows and
+  macOS does not ship NumPy. If NumPy is missing the docker will load with a
+  friendly placeholder message instead of the colour selector.
 
 Installing NumPy into Krita's Python:
 
 - **Linux** — Krita typically uses the system Python. Install via your package
   manager (`sudo apt install python3-numpy`, `sudo dnf install python3-numpy`,
   etc.) or `pip install --user numpy`.
-- **Windows** — open a Command Prompt and run, replacing the path with your
-  Krita install location:
+- **Windows** — if NumPy is missing, open the docker and click
+  **Install NumPy**. The plugin will ask for confirmation, then install NumPy
+  into Krita's app data folder and prompt you to restart Krita. For manual
+  installation, install a matching 64-bit CPython for Krita's embedded Python
+  version, then run from this repo in PowerShell:
+  ```powershell
+  .\scripts\install_windows_numpy.ps1
   ```
-  "C:\Program Files\Krita (x64)\bin\python.exe" -m pip install numpy
-  ```
+  The script detects Krita's Python version from the installed `python*.dll`
+  when possible. If detection fails, pass the version explicitly, for example
+  `.\scripts\install_windows_numpy.ps1 -PythonVersion 3.10`. The script installs
+  NumPy into
+  `%APPDATA%\krita\oklab_colour_picker\site-packages`, which the plugin adds
+  to `sys.path` before importing NumPy.
 - **macOS** — Krita's bundled Python lives inside the app bundle. From a
   Terminal:
   ```sh
@@ -102,8 +111,8 @@ like any other docker.
 - **Plugin missing from the Plugin Manager** — confirm
   `oklab_colour_picker.desktop` sits directly inside `pykrita/`, not nested
   inside the `oklab_colour_picker/` subfolder.
-- **Docker shows "missing dependency" message** — install NumPy into Krita's
-  Python (see Prerequisites) and restart Krita.
+- **Docker shows "missing dependency" message** — click **Install NumPy** in
+  the docker, or install NumPy manually (see Prerequisites), then restart Krita.
 - **Errors on startup** — open **Tools → Scripts → Python Script Editor**, or
   launch Krita from a terminal, to see the traceback.
 - **Edits don't appear** — Krita reloads Python plugins only on restart.
