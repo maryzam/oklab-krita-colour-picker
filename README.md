@@ -24,10 +24,14 @@ Installing NumPy into Krita's Python:
   manager (`sudo apt install python3-numpy`, `sudo dnf install python3-numpy`,
   etc.) or `pip install --user numpy`.
 - **Windows** — if NumPy is missing, open the docker and click
-  **Install NumPy**. The plugin will ask for confirmation, then install NumPy
-  into Krita's app data folder and prompt you to restart Krita. The plugin
-  installs NumPy into `oklab_colour_picker/site-packages` under Krita's app
-  data location, which it adds to `sys.path` before importing NumPy.
+  **Install NumPy**. The plugin uses Krita's bundled `python.exe` to download
+  NumPy from PyPI into `oklab_colour_picker/site-packages` under Krita's app
+  data folder, then prompts you to restart Krita. The plugin adds that folder
+  to `sys.path` before importing NumPy. To install manually instead, run from
+  a Command Prompt:
+  ```
+  "C:\Program Files\Krita (x64)\bin\python.exe" -m pip install numpy
+  ```
 - **macOS** — Krita's bundled Python lives inside the app bundle. From a
   Terminal:
   ```sh

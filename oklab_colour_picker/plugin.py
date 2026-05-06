@@ -56,7 +56,6 @@ def create_dock_widget_class(
             self._visibility_connection = None
 
             try:
-                _add_vendor_site_packages(app_data_location)
                 from oklab_colour_picker.dock import ColourPickerDockPanel, connect_dock_visibility
             except ModuleNotFoundError as exc:
                 if not _is_known_runtime_dependency(exc):
@@ -169,8 +168,11 @@ def _build_missing_dependency_widget(
         finished = QtCore.pyqtSignal(bool, str)
 
         def run(self) -> None:
-            result = dependency_installer(vendor_path)
-            self.finished.emit(bool(result.success), str(result.message))
+            try:
+                result = dependency_installer(vendor_path)
+                self.finished.emit(bool(result.success), str(result.message))
+            except Exception as exc:
+                self.finished.emit(False, f"NumPy installation failed: {exc}")
 
     class InstallController(QtCore.QObject):
         @QtCore.pyqtSlot(bool, str)
@@ -194,9 +196,9 @@ def _build_missing_dependency_widget(
         response = QtWidgets.QMessageBox.question(
             widget,
             "Install NumPy",
-            "This will download NumPy from PyPI and install it into Krita's app data folder:\n\n"
+            "This will use Krita's bundled Python to download NumPy from PyPI into Krita's app data:\n\n"
             f"{vendor_path}\n\n"
-            "No files are installed outside that folder. Restart Krita after installation.",
+            "Restart Krita after installation.",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )

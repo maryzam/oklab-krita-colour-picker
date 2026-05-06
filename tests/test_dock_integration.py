@@ -224,6 +224,81 @@ def test_install_numpy_action_requires_confirmation(qtbot, monkeypatch, tmp_path
     assert installer_calls == []
 
 
+def test_install_numpy_action_runs_installer_when_confirmed(qtbot, monkeypatch, tmp_path):
+    import types
+
+    from oklab_colour_picker.dependency_bootstrap import InstallResult
+
+    fake_dock = types.ModuleType("oklab_colour_picker.dock")
+
+    def _raise_numpy_missing(_name):
+        raise ModuleNotFoundError("No module named 'numpy'", name="numpy")
+
+    fake_dock.__getattr__ = _raise_numpy_missing
+    monkeypatch.setitem(sys.modules, "oklab_colour_picker.dock", fake_dock)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *args, **kwargs: QtWidgets.QMessageBox.Yes)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *args, **kwargs: QtWidgets.QMessageBox.Ok)
+    installer_calls = []
+
+    def fake_installer(vendor_path):
+        installer_calls.append(vendor_path)
+        return InstallResult(True, "NumPy installed.")
+
+    dock_class = create_dock_widget_class(
+        FakeDockWidget,
+        app_data_location=str(tmp_path),
+        dependency_installer=fake_installer,
+    )
+    dock = dock_class()
+    qtbot.addWidget(dock)
+
+    status = dock.widget().findChild(QtWidgets.QLabel, "oklab-install-status")
+    button = dock.widget().findChild(QtWidgets.QPushButton, "oklab-install-numpy")
+    qtbot.mouseClick(button, QtCore.Qt.LeftButton)
+
+    qtbot.waitUntil(lambda: installer_calls and "installed" in status.text().lower(), timeout=5000)
+    expected_vendor = str(tmp_path / plugin_module.VENDOR_ROOT_DIRECTORY_NAME / plugin_module.VENDOR_SITE_PACKAGES_DIRECTORY_NAME)
+    assert installer_calls == [expected_vendor]
+    assert button.isEnabled()
+
+
+def test_install_numpy_action_reports_installer_exception(qtbot, monkeypatch, tmp_path):
+    import types
+
+    fake_dock = types.ModuleType("oklab_colour_picker.dock")
+
+    def _raise_numpy_missing(_name):
+        raise ModuleNotFoundError("No module named 'numpy'", name="numpy")
+
+    fake_dock.__getattr__ = _raise_numpy_missing
+    monkeypatch.setitem(sys.modules, "oklab_colour_picker.dock", fake_dock)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *args, **kwargs: QtWidgets.QMessageBox.Yes)
+    captured = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda parent, title, message, *args, **kwargs: captured.append(message) or QtWidgets.QMessageBox.Ok,
+    )
+
+    def boom(_vendor_path):
+        raise RuntimeError("network is down")
+
+    dock_class = create_dock_widget_class(
+        FakeDockWidget,
+        app_data_location=str(tmp_path),
+        dependency_installer=boom,
+    )
+    dock = dock_class()
+    qtbot.addWidget(dock)
+
+    button = dock.widget().findChild(QtWidgets.QPushButton, "oklab-install-numpy")
+    qtbot.mouseClick(button, QtCore.Qt.LeftButton)
+
+    qtbot.waitUntil(lambda: captured, timeout=5000)
+    assert "network is down" in captured[0]
+    assert button.isEnabled()
+
+
 def test_dock_propagates_unexpected_import_errors(qtbot, monkeypatch):
     import sys
     import types
