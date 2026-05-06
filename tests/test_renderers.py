@@ -3,9 +3,9 @@ import math
 import numpy as np
 import pytest
 
-from lab_colour_picker import color_math
-from lab_colour_picker.renderers import render_rgba
-from lab_colour_picker.selector_models import (
+from oklab_colour_picker import color_math
+from oklab_colour_picker.renderers import render_rgba
+from oklab_colour_picker.selector_models import (
     ChromaLightnessModel,
     HueLightnessModel,
     LightnessSliceModel,

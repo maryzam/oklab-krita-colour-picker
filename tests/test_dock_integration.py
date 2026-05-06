@@ -8,10 +8,10 @@ pytest.importorskip("PyQt5")
 
 from PyQt5 import QtCore, QtWidgets
 
-import lab_colour_picker
-from lab_colour_picker import color_math
-from lab_colour_picker.dock import ColourPickerDockPanel, SelectorMode, connect_dock_visibility
-from lab_colour_picker.plugin import DOCK_FACTORY_ID, DOCK_TITLE, create_dock_widget_class, register_plugin
+import oklab_colour_picker
+from oklab_colour_picker import color_math
+from oklab_colour_picker.dock import ColourPickerDockPanel, SelectorMode, connect_dock_visibility
+from oklab_colour_picker.plugin import DOCK_FACTORY_ID, DOCK_TITLE, create_dock_widget_class, register_plugin
 
 
 def test_dock_panel_constructs_all_selector_views_and_switches_modes(qtbot):
@@ -154,9 +154,48 @@ def test_created_krita_dock_builds_panel_and_wires_visibility(qtbot):
     assert controller.visibility == [False]
 
 
+def test_dock_shows_friendly_message_when_numpy_is_missing(qtbot, monkeypatch):
+    import sys
+    import types
+
+    fake_dock = types.ModuleType("oklab_colour_picker.dock")
+
+    def _raise_numpy_missing(_name):
+        raise ModuleNotFoundError("No module named 'numpy'", name="numpy")
+
+    fake_dock.__getattr__ = _raise_numpy_missing
+    monkeypatch.setitem(sys.modules, "oklab_colour_picker.dock", fake_dock)
+
+    dock_class = create_dock_widget_class(FakeDockWidget)
+    dock = dock_class()
+    qtbot.addWidget(dock)
+
+    widget = dock.widget()
+    assert isinstance(widget, QtWidgets.QLabel)
+    assert widget.objectName() == "oklab-missing-dependency"
+    assert "numpy" in widget.text().lower()
+
+
+def test_dock_propagates_unexpected_import_errors(qtbot, monkeypatch):
+    import sys
+    import types
+
+    fake_dock = types.ModuleType("oklab_colour_picker.dock")
+
+    def _raise_unknown(_name):
+        raise ModuleNotFoundError("No module named 'something_else'", name="something_else")
+
+    fake_dock.__getattr__ = _raise_unknown
+    monkeypatch.setitem(sys.modules, "oklab_colour_picker.dock", fake_dock)
+
+    dock_class = create_dock_widget_class(FakeDockWidget)
+    with pytest.raises(ModuleNotFoundError):
+        dock_class()
+
+
 def test_package_exports_register_plugin():
-    assert lab_colour_picker.__all__ == ["register_plugin"]
-    assert lab_colour_picker.register_plugin is register_plugin
+    assert oklab_colour_picker.__all__ == ["register_plugin"]
+    assert oklab_colour_picker.register_plugin is register_plugin
 
 
 class FakeController:

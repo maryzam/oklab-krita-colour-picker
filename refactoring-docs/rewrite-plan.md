@@ -24,7 +24,7 @@ Keep behaviour unchanged, but allow the minimal packaging edits required to
 make it load as a separate Krita plugin: distinct desktop file,`X-KDE-Library`, Python package path, dock factory id, and dock title (e.g.
 "OKLab Colour Selector (legacy)").
 
-Build the rewrite version under `lab_colour_picker/` from empty.
+Build the rewrite version under `oklab_colour_picker/` from empty.
 
 Both plugins remain installable simultaneously throughout the rewrite, which enables side-by-side exploratory testing in real Krita: same foreground colour, two pickers, immediate visual comparison of latency, gamut handling,indicator placement, and feel.
 

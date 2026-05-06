@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from lab_colour_picker import color_math
+from oklab_colour_picker import color_math
 
 
 def test_srgb_oklab_known_reference_values():

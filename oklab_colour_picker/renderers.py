@@ -8,7 +8,7 @@ from typing import Protocol, Sequence
 import numpy as np
 import numpy.typing as npt
 
-from lab_colour_picker import color_math
+from oklab_colour_picker import color_math
 
 
 class VectorizedSelectorModel(Protocol):

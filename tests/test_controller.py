@@ -1,8 +1,8 @@
 import numpy as np
 
-from lab_colour_picker import color_math
-from lab_colour_picker.controller import ColourPickerController, normalize_oklab_for_krita
-from lab_colour_picker.krita_adapter import KritaForegroundAdapter
+from oklab_colour_picker import color_math
+from oklab_colour_picker.controller import ColourPickerController, normalize_oklab_for_krita
+from oklab_colour_picker.krita_adapter import KritaForegroundAdapter
 
 
 def test_foreground_commits_are_coalesced_to_latest_colour():

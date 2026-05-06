@@ -36,11 +36,21 @@ def create_dock_widget_class(dock_widget_base: type, *, controller_factory: Call
     class OKLabColourPickerDock(dock_widget_base):
         def __init__(self) -> None:
             super().__init__()
-            from lab_colour_picker.dock import ColourPickerDockPanel, connect_dock_visibility
+            self.setWindowTitle(DOCK_TITLE)
+            self._controller = None
+            self._panel = None
+            self._visibility_connection = None
+
+            try:
+                from oklab_colour_picker.dock import ColourPickerDockPanel, connect_dock_visibility
+            except ModuleNotFoundError as exc:
+                if not _is_known_runtime_dependency(exc):
+                    raise
+                self.setWidget(_build_missing_dependency_widget(exc))
+                return
 
             self._controller = _create_controller() if controller_factory is None else controller_factory()
             self._panel = ColourPickerDockPanel(self._controller, self)
-            self.setWindowTitle(DOCK_TITLE)
             self.setWidget(self._panel)
             self._visibility_connection = connect_dock_visibility(self, self._controller)
             self.destroyed.connect(self._disconnect_visibility)
@@ -49,15 +59,42 @@ def create_dock_widget_class(dock_widget_base: type, *, controller_factory: Call
             pass
 
         def _disconnect_visibility(self) -> None:
-            self._visibility_connection.disconnect()
+            if self._visibility_connection is not None:
+                self._visibility_connection.disconnect()
 
     OKLabColourPickerDock.__name__ = "OKLabColourPickerDock"
     return OKLabColourPickerDock
 
 
+_KNOWN_RUNTIME_DEPENDENCIES = frozenset({"numpy"})
+
+
+def _is_known_runtime_dependency(error: ModuleNotFoundError) -> bool:
+    name = error.name or ""
+    root = name.split(".", 1)[0]
+    return root in _KNOWN_RUNTIME_DEPENDENCIES
+
+
+def _build_missing_dependency_widget(error: ImportError):
+    from PyQt5 import QtCore, QtWidgets
+
+    missing = error.name or str(error)
+    label = QtWidgets.QLabel(
+        f"OKLab Colour Selector could not start: missing Python dependency '{missing}'.\n\n"
+        "Krita's bundled Python does not ship NumPy by default. Install NumPy "
+        "into the Python interpreter Krita uses, then restart Krita. See the "
+        "plugin README for platform-specific instructions."
+    )
+    label.setAlignment(QtCore.Qt.AlignCenter)
+    label.setWordWrap(True)
+    label.setMargin(16)
+    label.setObjectName("oklab-missing-dependency")
+    return label
+
+
 def _create_controller():
-    from lab_colour_picker.controller import ColourPickerController
-    from lab_colour_picker.krita_adapter import KritaForegroundAdapter, QtForegroundTimer, QtSingleShotScheduler
+    from oklab_colour_picker.controller import ColourPickerController
+    from oklab_colour_picker.krita_adapter import KritaForegroundAdapter, QtForegroundTimer, QtSingleShotScheduler
 
     return ColourPickerController(
         KritaForegroundAdapter(),

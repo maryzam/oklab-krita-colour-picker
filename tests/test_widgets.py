@@ -8,9 +8,9 @@ pytest.importorskip("PyQt5")
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from lab_colour_picker import color_math
-from lab_colour_picker.selector_models import HueLightnessModel, LightnessSliceModel
-from lab_colour_picker.widgets import SelectorWidget
+from oklab_colour_picker import color_math
+from oklab_colour_picker.selector_models import HueLightnessModel, LightnessSliceModel
+from oklab_colour_picker.widgets import SelectorWidget
 
 
 def test_mouse_drag_emits_previews_and_commit(qtbot):

@@ -1,6 +1,6 @@
 """OKLab colour picker Krita plugin package."""
 
-from lab_colour_picker.plugin import register_plugin
+from oklab_colour_picker.plugin import register_plugin
 
 
 # Krita loads the package named by X-KDE-Library, so package import performs

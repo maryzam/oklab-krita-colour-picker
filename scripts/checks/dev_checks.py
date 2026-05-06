@@ -19,18 +19,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 LEGACY_PREFIX = "legacy-plugin/"
 KRITA_ALLOWED = {
-    Path("lab_colour_picker/plugin.py"),
-    Path("lab_colour_picker/controller.py"),
-    Path("lab_colour_picker/krita_adapter.py"),
+    Path("oklab_colour_picker/plugin.py"),
+    Path("oklab_colour_picker/controller.py"),
+    Path("oklab_colour_picker/krita_adapter.py"),
 }
 PURE_NO_QT = {
-    Path("lab_colour_picker/color_math.py"),
-    Path("lab_colour_picker/renderers.py"),
-    Path("lab_colour_picker/selector_models.py"),
+    Path("oklab_colour_picker/color_math.py"),
+    Path("oklab_colour_picker/renderers.py"),
+    Path("oklab_colour_picker/selector_models.py"),
 }
 SET_FOREGROUND_ALLOWED = {
-    Path("lab_colour_picker/controller.py"),
-    Path("lab_colour_picker/krita_adapter.py"),
+    Path("oklab_colour_picker/controller.py"),
+    Path("oklab_colour_picker/krita_adapter.py"),
 }
 
 
