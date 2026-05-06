@@ -89,6 +89,7 @@ class SelectorWidget(QtWidgets.QWidget):
             event.ignore()
             return
         self.setFocus(QtCore.Qt.MouseFocusReason)
+        self._keyboard_commit_pending = False
         self._pressed = True
         self._colour_before_drag = None if self._selected_colour is None else self._selected_colour.copy()
         self._preview_at(event.pos())
@@ -123,6 +124,10 @@ class SelectorWidget(QtWidgets.QWidget):
             self.previewed.emit(None)
         super().leaveEvent(event)
 
+    def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:
+        self._flush_keyboard_commit()
+        super().focusOutEvent(event)
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         position = self.indicator_position()
         if position is None:
@@ -152,9 +157,7 @@ class SelectorWidget(QtWidgets.QWidget):
             event.ignore()
             return
 
-        self._keyboard_commit_pending = False
-        if self._selected_colour is not None:
-            self.committed.emit(self._selected_colour.copy())
+        self._flush_keyboard_commit()
         event.accept()
 
     def _preview_at(self, point: QtCore.QPoint) -> None:
@@ -195,14 +198,14 @@ class SelectorWidget(QtWidgets.QWidget):
     def _nearest_valid_point(self, position: tuple[float, float], dx: float, dy: float) -> QtCore.QPoint | None:
         start_x, start_y = position
         steps = max(1, int(max(abs(dx), abs(dy))))
-        for distance in range(steps, -1, -1):
-            fraction = distance / steps
-            point = QtCore.QPoint(
-                _clamp_round(start_x + dx * fraction, 0, self.width() - 1),
-                _clamp_round(start_y + dy * fraction, 0, self.height() - 1),
-            )
-            if self._colour_at(point) is not None:
-                return point
+        fractions = np.arange(steps, -1, -1, dtype=float) / steps
+        x = np.rint(np.clip(start_x + dx * fractions, 0, self.width() - 1)).astype(float)
+        y = np.rint(np.clip(start_y + dy * fractions, 0, self.height() - 1)).astype(float)
+        _, valid = self._model.colors_at_positions(x, y, _widget_size(self))
+        valid_indices = np.flatnonzero(valid)
+        if valid_indices.size:
+            index = int(valid_indices[0])
+            return QtCore.QPoint(int(x[index]), int(y[index]))
         return None
 
     def _is_keyboard_navigation_key(self, key: int) -> bool:
@@ -216,6 +219,13 @@ class SelectorWidget(QtWidgets.QWidget):
             QtCore.Qt.Key_PageUp,
             QtCore.Qt.Key_PageDown,
         }
+
+    def _flush_keyboard_commit(self) -> None:
+        if not self._keyboard_commit_pending:
+            return
+        self._keyboard_commit_pending = False
+        if self._selected_colour is not None:
+            self.committed.emit(self._selected_colour.copy())
 
     def _paint_indicator(self, painter: QtGui.QPainter) -> None:
         position = self.indicator_position()

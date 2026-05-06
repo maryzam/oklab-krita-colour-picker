@@ -157,6 +157,58 @@ def test_keyboard_step_at_boundary_keeps_event_handled(qtbot):
     assert widget.selected_colour is not None
 
 
+def test_mouse_interaction_cancels_pending_keyboard_commit(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(64, 32)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    start = widget.model.color_at_position((20, 10), _size(widget))
+    assert start is not None
+    widget.set_selected_colour(start)
+
+    commits = []
+    widget.committed.connect(commits.append)
+
+    key_press = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(widget, key_press)
+    assert key_press.isAccepted()
+
+    point = QtCore.QPoint(24, 16)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, point, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, point, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    key_release = QtGui.QKeyEvent(QtCore.QEvent.KeyRelease, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(widget, key_release)
+
+    assert len(commits) == 1
+    np.testing.assert_allclose(commits[0], widget.selected_colour)
+
+
+def test_focus_loss_flushes_pending_keyboard_commit(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(64, 32)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    start = widget.model.color_at_position((20, 10), _size(widget))
+    assert start is not None
+    widget.set_selected_colour(start)
+
+    commits = []
+    widget.committed.connect(commits.append)
+
+    key_press = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(widget, key_press)
+    assert key_press.isAccepted()
+
+    focus_out = QtGui.QFocusEvent(QtCore.QEvent.FocusOut)
+    QtWidgets.QApplication.sendEvent(widget, focus_out)
+
+    assert len(commits) == 1
+    np.testing.assert_allclose(commits[0], widget.selected_colour)
+
+
 def test_indicator_position_comes_from_model(qtbot):
     widget = SelectorWidget(HueLightnessModel(hue=math.pi / 3.0))
     widget.resize(100, 50)
