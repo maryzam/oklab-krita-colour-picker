@@ -256,7 +256,7 @@ def test_install_numpy_action_runs_installer_when_confirmed(qtbot, monkeypatch, 
     button = dock.widget().findChild(QtWidgets.QPushButton, "oklab-install-numpy")
     qtbot.mouseClick(button, QtCore.Qt.LeftButton)
 
-    qtbot.waitUntil(lambda: installer_calls and "installed" in status.text().lower(), timeout=5000)
+    qtbot.waitUntil(lambda: bool(installer_calls) and "installed" in status.text().lower(), timeout=5000)
     expected_vendor = str(tmp_path / plugin_module.VENDOR_ROOT_DIRECTORY_NAME / plugin_module.VENDOR_SITE_PACKAGES_DIRECTORY_NAME)
     assert installer_calls == [expected_vendor]
     assert button.isEnabled()
@@ -294,7 +294,7 @@ def test_install_numpy_action_reports_installer_exception(qtbot, monkeypatch, tm
     button = dock.widget().findChild(QtWidgets.QPushButton, "oklab-install-numpy")
     qtbot.mouseClick(button, QtCore.Qt.LeftButton)
 
-    qtbot.waitUntil(lambda: captured, timeout=5000)
+    qtbot.waitUntil(lambda: bool(captured), timeout=5000)
     assert "network is down" in captured[0]
     assert button.isEnabled()
 
