@@ -25,6 +25,21 @@ def test_krita_imports_are_limited_to_boundary_files():
     assert offenders == []
 
 
+def test_widgets_do_not_import_krita():
+    offenders = []
+    widgets_dir = ROOT / "lab_colour_picker" / "widgets"
+    assert widgets_dir.exists()
+
+    for full_path in sorted(widgets_dir.rglob("*.py")):
+        path = full_path.relative_to(ROOT)
+        tree = ast.parse(full_path.read_text(), filename=path.as_posix())
+        for module in _imported_modules(tree):
+            if _is_krita_module(module):
+                offenders.append(f"{path}: {module}")
+
+    assert offenders == []
+
+
 def test_pure_color_math_has_no_qt_or_krita_imports():
     offenders = []
     for path in sorted(PURE_NO_QT_OR_KRITA):
