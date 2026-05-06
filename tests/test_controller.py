@@ -281,7 +281,8 @@ def test_krita_adapter_rejects_linear_srgb_fallback_without_qcolor_conversion():
 
 
 def test_krita_adapter_does_not_rescale_normalized_components_above_one():
-    managed = FakeManagedColor(components=[1.2, 0.5, 0.25, 1.0])
+    # ManagedColor.components() is BGRA; values below pick up red=1.2, green=0.5, blue=0.25.
+    managed = FakeManagedColor(components=[0.25, 0.5, 1.2, 1.0])
     view = FakeView(foreground_color=managed)
     adapter = KritaForegroundAdapter(FakeKrita(active_window=FakeWindow(active_view=view)))
 
@@ -289,6 +290,25 @@ def test_krita_adapter_does_not_rescale_normalized_components_above_one():
     actual = adapter.get_foreground()
 
     np.testing.assert_allclose(actual, expected)
+
+
+def test_krita_adapter_writes_components_in_bgra_order():
+    managed = FakeManagedColor()
+    view = FakeView(foreground_color=managed)
+
+    def factory(*args, **kwargs):
+        return managed
+
+    adapter = KritaForegroundAdapter(
+        FakeKrita(active_window=FakeWindow(active_view=view)),
+        managed_color_factory=factory,
+    )
+
+    red_oklab = color_math.srgb_to_oklab([1.0, 0.0, 0.0])
+    adapter.set_foreground(red_oklab)
+
+    assert len(view.set_foreground_calls) == 1
+    np.testing.assert_allclose(managed.components(), [0.0, 0.0, 1.0, 1.0], atol=1e-6)
 
 
 def test_krita_adapter_returns_readback_colour_after_setting_foreground():
