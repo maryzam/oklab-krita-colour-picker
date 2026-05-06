@@ -43,7 +43,9 @@ def create_dock_widget_class(dock_widget_base: type, *, controller_factory: Call
 
             try:
                 from oklab_colour_picker.dock import ColourPickerDockPanel, connect_dock_visibility
-            except ImportError as exc:
+            except ModuleNotFoundError as exc:
+                if not _is_known_runtime_dependency(exc):
+                    raise
                 self.setWidget(_build_missing_dependency_widget(exc))
                 return
 
@@ -62,6 +64,15 @@ def create_dock_widget_class(dock_widget_base: type, *, controller_factory: Call
 
     OKLabColourPickerDock.__name__ = "OKLabColourPickerDock"
     return OKLabColourPickerDock
+
+
+_KNOWN_RUNTIME_DEPENDENCIES = frozenset({"numpy"})
+
+
+def _is_known_runtime_dependency(error: ModuleNotFoundError) -> bool:
+    name = error.name or ""
+    root = name.split(".", 1)[0]
+    return root in _KNOWN_RUNTIME_DEPENDENCIES
 
 
 def _build_missing_dependency_widget(error: ImportError):

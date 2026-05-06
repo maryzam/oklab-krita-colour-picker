@@ -3,7 +3,7 @@
 Scope: full read of the active codebase — `colour_selector_main.py`,
 `selector_common.py`, `oklab.py`, `util.py`, `b_tree.py`, the three
 selector views (`lightness_selector.py`, `hue_plane_selector.py`,
-`chroma_selector.py`), plus the legacy `oklab_colour_picker.py`.
+`chroma_selector.py`), plus the legacy `lab_colour_picker.py`.
 
 Each item includes file:line evidence and rationale. Recommended order
 of work and a verdict on rewrite-vs-iterate are at the end.
@@ -103,7 +103,7 @@ self.plane.toggled.connect(self.set_display)   # should be self.chroma
 nothing on its own — the view changes only because clicking it
 un-toggles "Lightness" or "Hue Plane", whose handlers do fire.
 `current_view` becomes stale. Same typo exists in legacy
-`oklab_colour_picker.py:323-324`.
+`lab_colour_picker.py:323-324`.
 
 ---
 
@@ -135,7 +135,7 @@ would be enough.
 ## 5. `Indicator` widget construction is wasteful and brittle
 
 `selector_common.py:35-46` (and duplicated at
-`oklab_colour_picker.py:79-91`): generates two pixmaps from the
+`lab_colour_picker.py:79-91`): generates two pixmaps from the
 `krita_tool_ellipse` toolbar icon, masks one, and stacks them as
 `QLabel`s. The author's own comment ("I'm sure there's a better way to
 do this … this abomination") flags it. Replacement is one method:
@@ -212,7 +212,7 @@ self.slider.valueChanged.connect(self.modify…)`. This:
 - Disconnects **all** signals (other code subscribing to
   `valueChanged` would silently break),
 - Reallocates a Python lambda each time in some paths
-  (`oklab_colour_picker.py:238, 247`),
+  (`lab_colour_picker.py:238, 247`),
 - Is unnecessary — `QSignalBlocker(self.slider)` (or
   `self.slider.blockSignals(True)`) is the idiomatic Qt approach.
 
@@ -242,7 +242,7 @@ OKLab strip at fixed L and per-hue *max in-gamut* chroma, then calls
 
 ## 11. `2π ≠ 6.28`
 
-`hue_plane_selector.py:108`, `oklab_colour_picker.py:229`:
+`hue_plane_selector.py:108`, `lab_colour_picker.py:229`:
 `lerp(0, 6.28, value/1000)`. `6.28` is short of `2π` by 0.0032 rad
 (≈0.18°). Small discontinuity at wrap-around. Use `math.tau`.
 
@@ -260,7 +260,7 @@ render at the actual widget size and react to `resizeEvent`.
 
 ## 13. Dead legacy code shipped in the plugin
 
-`oklab_colour_picker.py` (370 lines) is *not* imported by `__init__.py`
+`lab_colour_picker.py` (370 lines) is *not* imported by `__init__.py`
 and contains an older, separately-buggy implementation. Krita scans
 the plugin folder; this file isn't loaded as a dock factory through
 the main path, but `Krita.instance().addDockWidgetFactory(...)` at
@@ -301,7 +301,7 @@ under a clearly archived path.
    anti-aliasing.
 7. **Replace `HueEffect` with a true OKLab strip slider** (#10).
 8. **Make widgets resize** (#12), enabled by step 1.
-9. **Delete `oklab_colour_picker.py` legacy file and the `cbrt`
+9. **Delete `lab_colour_picker.py` legacy file and the `cbrt`
    hand-roll**.
 
 ---

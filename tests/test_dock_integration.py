@@ -154,10 +154,17 @@ def test_created_krita_dock_builds_panel_and_wires_visibility(qtbot):
     assert controller.visibility == [False]
 
 
-def test_dock_shows_friendly_message_when_dock_module_import_fails(qtbot, monkeypatch):
+def test_dock_shows_friendly_message_when_numpy_is_missing(qtbot, monkeypatch):
     import sys
+    import types
 
-    monkeypatch.setitem(sys.modules, "oklab_colour_picker.dock", None)
+    fake_dock = types.ModuleType("oklab_colour_picker.dock")
+
+    def _raise_numpy_missing(_name):
+        raise ModuleNotFoundError("No module named 'numpy'", name="numpy")
+
+    fake_dock.__getattr__ = _raise_numpy_missing
+    monkeypatch.setitem(sys.modules, "oklab_colour_picker.dock", fake_dock)
 
     dock_class = create_dock_widget_class(FakeDockWidget)
     dock = dock_class()
@@ -166,8 +173,24 @@ def test_dock_shows_friendly_message_when_dock_module_import_fails(qtbot, monkey
     widget = dock.widget()
     assert isinstance(widget, QtWidgets.QLabel)
     assert widget.objectName() == "oklab-missing-dependency"
-    assert "NumPy" in widget.text()
-    dock.visibilityChanged.emit(False)
+    assert "numpy" in widget.text().lower()
+
+
+def test_dock_propagates_unexpected_import_errors(qtbot, monkeypatch):
+    import sys
+    import types
+
+    fake_dock = types.ModuleType("oklab_colour_picker.dock")
+
+    def _raise_unknown(_name):
+        raise ModuleNotFoundError("No module named 'something_else'", name="something_else")
+
+    fake_dock.__getattr__ = _raise_unknown
+    monkeypatch.setitem(sys.modules, "oklab_colour_picker.dock", fake_dock)
+
+    dock_class = create_dock_widget_class(FakeDockWidget)
+    with pytest.raises(ModuleNotFoundError):
+        dock_class()
 
 
 def test_package_exports_register_plugin():

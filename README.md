@@ -8,9 +8,8 @@ More information to come. Stay tuned...
 
 ## Installing from source
 
-The active plugin lives in `oklab_colour_picker/`, with the Krita manifest at
-`oklab_colour_picker.desktop`. The folder under `legacy-plugin/` is reference
-material from the original implementation and is not part of the install.
+The plugin lives in `oklab_colour_picker/`, with the Krita manifest at
+`oklab_colour_picker.desktop`.
 
 ### Prerequisites
 
@@ -62,19 +61,29 @@ pykrita/
     └── ... (the rest of the package)
 ```
 
-Linux/macOS shell:
+Linux:
 
 ```sh
 cp -r oklab_colour_picker          ~/.local/share/krita/pykrita/
 cp    oklab_colour_picker.desktop  ~/.local/share/krita/pykrita/
 ```
 
+macOS:
+
+```sh
+cp -r oklab_colour_picker          ~/Library/Application\ Support/krita/pykrita/
+cp    oklab_colour_picker.desktop  ~/Library/Application\ Support/krita/pykrita/
+```
+
+Windows (Command Prompt):
+
+```
+xcopy /E /I oklab_colour_picker "%APPDATA%\krita\pykrita\oklab_colour_picker"
+copy oklab_colour_picker.desktop "%APPDATA%\krita\pykrita\"
+```
+
 You may symlink instead of copying if you want `git pull` to update the
 installed version.
-
-If you previously had the legacy `lab_colour_picker/` plugin installed, delete
-that folder and its `lab_colour_picker.desktop` from `pykrita/` before
-restarting Krita to avoid stale `.pyc` files.
 
 ### 3. Enable the plugin
 
