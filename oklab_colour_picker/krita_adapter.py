@@ -100,7 +100,8 @@ def _managed_color_from_srgb(srgb: Sequence[float], managed_color_factory=None):
         managed_color_factory = ManagedColor
 
     managed = managed_color_factory("RGBA", "U8", "sRGB-elle-V2-srgbtrc.icc")
-    managed.setComponents([float(srgb[0]), float(srgb[1]), float(srgb[2]), 1.0])
+    # Krita's RGBA/U8 ManagedColor stores channels as BGRA, not RGBA.
+    managed.setComponents([float(srgb[2]), float(srgb[1]), float(srgb[0]), 1.0])
     return managed
 
 
@@ -119,7 +120,8 @@ def _srgb_components_from_managed_color(managed_color) -> list[float] | None:
     if len(components) < 3:
         return None
 
-    rgb = [float(component) for component in components[:3]]
+    # Krita's RGBA/U8 ManagedColor stores channels as BGRA, not RGBA.
+    rgb = [float(components[2]), float(components[1]), float(components[0])]
     return [float(np.clip(component, 0.0, 1.0)) for component in rgb]
 
 
