@@ -40,6 +40,7 @@ class SelectorWidget(QtWidgets.QWidget):
         self._image_cache_buffer: np.ndarray | None = None
         self._image_cache: QtGui.QImage | None = None
         self._pressed = False
+        self._keyboard_commit_pending = False
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
         self.setMinimumSize(32, 32)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -69,10 +70,6 @@ class SelectorWidget(QtWidgets.QWidget):
         return self._model.position_for_color(self._selected_colour, _widget_size(self))
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
-        image_area = self.rect()
-        if not event.rect().intersects(image_area):
-            return
-
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
         painter.setClipRect(event.rect())
@@ -111,12 +108,13 @@ class SelectorWidget(QtWidgets.QWidget):
         self._pressed = False
         colour = self._colour_at(event.pos())
         if colour is not None:
-            self._selected_colour = colour
+            self._selected_colour = colour.copy()
             self.update()
-            self.committed.emit(colour)
+            self.committed.emit(colour.copy())
         else:
             self._selected_colour = self._colour_before_drag
             self.update()
+            self.previewed.emit(None if self._selected_colour is None else self._selected_colour.copy())
         self._colour_before_drag = None
         event.accept()
 
@@ -130,44 +128,94 @@ class SelectorWidget(QtWidgets.QWidget):
         if position is None:
             position = ((self.width() - 1.0) / 2.0, (self.height() - 1.0) / 2.0)
 
-        x, y = position
-        key = event.key()
-        if key == QtCore.Qt.Key_Left:
-            x -= 1.0
-        elif key == QtCore.Qt.Key_Right:
-            x += 1.0
-        elif key == QtCore.Qt.Key_Up:
-            y -= 1.0
-        elif key == QtCore.Qt.Key_Down:
-            y += 1.0
-        elif key == QtCore.Qt.Key_Home:
-            x = 0.0
-        elif key == QtCore.Qt.Key_End:
-            x = self.width() - 1.0
-        else:
+        point = self._keyboard_target_position(position, event)
+        if point is None:
             event.ignore()
             return
 
-        point = QtCore.QPoint(_clamp_round(x, 0, self.width() - 1), _clamp_round(y, 0, self.height() - 1))
         colour = self._colour_at(point)
         if colour is None:
             event.ignore()
             return
 
-        self._selected_colour = colour
+        self._selected_colour = colour.copy()
+        self._keyboard_commit_pending = True
         self.update()
-        self.previewed.emit(colour)
-        self.committed.emit(colour)
+        self.previewed.emit(colour.copy())
+        event.accept()
+
+    def keyReleaseEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.isAutoRepeat():
+            event.accept()
+            return
+        if not self._is_keyboard_navigation_key(event.key()) or not self._keyboard_commit_pending:
+            event.ignore()
+            return
+
+        self._keyboard_commit_pending = False
+        if self._selected_colour is not None:
+            self.committed.emit(self._selected_colour.copy())
         event.accept()
 
     def _preview_at(self, point: QtCore.QPoint) -> None:
         colour = self._colour_at(point)
-        self._selected_colour = colour
+        self._selected_colour = None if colour is None else colour.copy()
         self.update()
-        self.previewed.emit(colour)
+        self.previewed.emit(None if colour is None else colour.copy())
 
     def _colour_at(self, point: QtCore.QPoint) -> np.ndarray | None:
         return self._model.color_at_position((point.x(), point.y()), _widget_size(self))
+
+    def _keyboard_target_position(
+        self,
+        position: tuple[float, float],
+        event: QtGui.QKeyEvent,
+    ) -> QtCore.QPoint | None:
+        x, y = position
+        step = _keyboard_step(self.size(), event.modifiers())
+        key = event.key()
+        if key == QtCore.Qt.Key_Left:
+            return self._nearest_valid_point(position, -step, 0.0)
+        if key == QtCore.Qt.Key_Right:
+            return self._nearest_valid_point(position, step, 0.0)
+        if key == QtCore.Qt.Key_Up:
+            return self._nearest_valid_point(position, 0.0, -step)
+        if key == QtCore.Qt.Key_Down:
+            return self._nearest_valid_point(position, 0.0, step)
+        if key == QtCore.Qt.Key_Home:
+            return self._nearest_valid_point(position, -x, 0.0)
+        if key == QtCore.Qt.Key_End:
+            return self._nearest_valid_point(position, self.width() - 1.0 - x, 0.0)
+        if key == QtCore.Qt.Key_PageUp:
+            return self._nearest_valid_point(position, 0.0, -y)
+        if key == QtCore.Qt.Key_PageDown:
+            return self._nearest_valid_point(position, 0.0, self.height() - 1.0 - y)
+        return None
+
+    def _nearest_valid_point(self, position: tuple[float, float], dx: float, dy: float) -> QtCore.QPoint | None:
+        start_x, start_y = position
+        steps = max(1, int(max(abs(dx), abs(dy))))
+        for distance in range(steps, -1, -1):
+            fraction = distance / steps
+            point = QtCore.QPoint(
+                _clamp_round(start_x + dx * fraction, 0, self.width() - 1),
+                _clamp_round(start_y + dy * fraction, 0, self.height() - 1),
+            )
+            if self._colour_at(point) is not None:
+                return point
+        return None
+
+    def _is_keyboard_navigation_key(self, key: int) -> bool:
+        return key in {
+            QtCore.Qt.Key_Left,
+            QtCore.Qt.Key_Right,
+            QtCore.Qt.Key_Up,
+            QtCore.Qt.Key_Down,
+            QtCore.Qt.Key_Home,
+            QtCore.Qt.Key_End,
+            QtCore.Qt.Key_PageUp,
+            QtCore.Qt.Key_PageDown,
+        }
 
     def _paint_indicator(self, painter: QtGui.QPainter) -> None:
         position = self.indicator_position()
@@ -222,3 +270,12 @@ def _as_oklab(oklab: Sequence[float] | None) -> np.ndarray | None:
 
 def _clamp_round(value: float, lower: int, upper: int) -> int:
     return max(lower, min(upper, round(value)))
+
+
+def _keyboard_step(size: QtCore.QSize, modifiers: QtCore.Qt.KeyboardModifiers) -> int:
+    if modifiers & QtCore.Qt.ShiftModifier:
+        return 1
+    base = max(1, min(size.width(), size.height()) // 64)
+    if modifiers & QtCore.Qt.ControlModifier:
+        return max(1, base * 4)
+    return base

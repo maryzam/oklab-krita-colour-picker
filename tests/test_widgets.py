@@ -46,7 +46,9 @@ def test_invalid_release_does_not_commit(qtbot):
     widget.set_selected_colour(previous)
 
     commits = []
+    previews = []
     widget.committed.connect(commits.append)
+    widget.previewed.connect(previews.append)
 
     invalid_corner = QtCore.QPoint(0, 0)
     _send_mouse(
@@ -66,6 +68,7 @@ def test_invalid_release_does_not_commit(qtbot):
 
     assert commits == []
     np.testing.assert_allclose(widget.selected_colour, previous)
+    np.testing.assert_allclose(previews[-1], previous)
 
 
 def test_programmatic_colour_update_blocks_widget_signals(qtbot):
@@ -89,7 +92,7 @@ def test_programmatic_colour_update_blocks_widget_signals(qtbot):
     np.testing.assert_allclose(widget.selected_colour, colour)
 
 
-def test_keyboard_nudge_emits_preview_and_commit(qtbot):
+def test_keyboard_nudge_previews_then_commits_on_release(qtbot):
     widget = SelectorWidget(HueLightnessModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
@@ -104,13 +107,54 @@ def test_keyboard_nudge_emits_preview_and_commit(qtbot):
     widget.previewed.connect(previews.append)
     widget.committed.connect(commits.append)
 
+    press = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
+    release = QtGui.QKeyEvent(QtCore.QEvent.KeyRelease, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(widget, press)
+
+    assert press.isAccepted()
+    assert len(previews) == 1
+    assert commits == []
+
+    QtWidgets.QApplication.sendEvent(widget, release)
+    assert release.isAccepted()
+    assert len(commits) == 1
+    np.testing.assert_allclose(commits[0], widget.selected_colour)
+
+
+def test_signal_payload_mutation_does_not_corrupt_widget_state(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(64, 32)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    commits = []
+    widget.committed.connect(commits.append)
+
+    point = QtCore.QPoint(24, 16)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, point, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, point, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    selected = widget.selected_colour
+    assert selected is not None
+    commits[0][:] = 0.0
+    np.testing.assert_allclose(widget.selected_colour, selected)
+
+
+def test_keyboard_step_at_boundary_keeps_event_handled(qtbot):
+    widget = SelectorWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(40, 80)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    start = widget.model.color_at_position((39, 40), _size(widget))
+    assert start is not None
+    widget.set_selected_colour(start)
+
     event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
     QtWidgets.QApplication.sendEvent(widget, event)
 
     assert event.isAccepted()
-    assert len(previews) == 1
-    assert len(commits) == 1
-    np.testing.assert_allclose(commits[0], widget.selected_colour)
+    assert widget.selected_colour is not None
 
 
 def test_indicator_position_comes_from_model(qtbot):
