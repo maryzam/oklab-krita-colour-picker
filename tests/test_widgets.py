@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PyQt5")
 
-from PyQt5 import QtCore, QtGui, QtTest, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 from lab_colour_picker import color_math
 from lab_colour_picker.selector_models import HueLightnessModel, LightnessSliceModel
@@ -26,13 +26,13 @@ def test_mouse_drag_emits_previews_and_commit(qtbot):
 
     start = QtCore.QPoint(8, 12)
     end = QtCore.QPoint(24, 16)
-    QtTest.QTest.mousePress(widget, QtCore.Qt.LeftButton, pos=start)
-    QtTest.QTest.mouseMove(widget, end)
-    QtTest.QTest.mouseRelease(widget, QtCore.Qt.LeftButton, pos=end)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, end, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, end, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
 
     assert len(previews) >= 2
     assert len(commits) == 1
-    np.testing.assert_allclose(commits[0], widget.model.color_at_position((end.x(), end.y()), (64, 32)))
+    np.testing.assert_allclose(commits[0], widget.model.color_at_position((end.x(), end.y()), _size(widget)))
 
 
 def test_invalid_release_does_not_commit(qtbot):
@@ -45,8 +45,20 @@ def test_invalid_release_does_not_commit(qtbot):
     widget.committed.connect(commits.append)
 
     invalid_corner = QtCore.QPoint(0, 0)
-    QtTest.QTest.mousePress(widget, QtCore.Qt.LeftButton, pos=invalid_corner)
-    QtTest.QTest.mouseRelease(widget, QtCore.Qt.LeftButton, pos=invalid_corner)
+    _send_mouse(
+        widget,
+        QtCore.QEvent.MouseButtonPress,
+        invalid_corner,
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.LeftButton,
+    )
+    _send_mouse(
+        widget,
+        QtCore.QEvent.MouseButtonRelease,
+        invalid_corner,
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.NoButton,
+    )
 
     assert commits == []
 
@@ -106,3 +118,19 @@ def test_paint_event_renders_selector_image(qtbot):
         if nontransparent:
             break
     assert nontransparent
+
+
+def _send_mouse(widget, event_type, position, button, buttons):
+    event = QtGui.QMouseEvent(
+        event_type,
+        QtCore.QPointF(position),
+        button,
+        buttons,
+        QtCore.Qt.NoModifier,
+    )
+    QtWidgets.QApplication.sendEvent(widget, event)
+    assert event.isAccepted()
+
+
+def _size(widget):
+    return widget.width(), widget.height()
