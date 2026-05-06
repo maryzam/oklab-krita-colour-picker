@@ -28,8 +28,7 @@ def test_krita_imports_are_limited_to_boundary_files():
 def test_widgets_do_not_import_krita():
     offenders = []
     widgets_dir = ROOT / "lab_colour_picker" / "widgets"
-    if not widgets_dir.exists():
-        return
+    assert widgets_dir.exists()
 
     for full_path in sorted(widgets_dir.rglob("*.py")):
         path = full_path.relative_to(ROOT)

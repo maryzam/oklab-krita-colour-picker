@@ -35,8 +35,12 @@ class SelectorWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._model = model
         self._selected_colour: np.ndarray | None = None
+        self._colour_before_drag: np.ndarray | None = None
+        self._image_cache_key: tuple[SelectorModel, int, int] | None = None
+        self._image_cache_buffer: np.ndarray | None = None
+        self._image_cache: QtGui.QImage | None = None
         self._pressed = False
-        self.setMouseTracking(True)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
         self.setMinimumSize(32, 32)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
@@ -52,12 +56,12 @@ class SelectorWidget(QtWidgets.QWidget):
         if self._model is model:
             return
         self._model = model
+        self._clear_image_cache()
         self.update()
 
     def set_selected_colour(self, oklab: Sequence[float] | None) -> None:
-        with _blocked_signals(self):
-            self._selected_colour = _as_oklab(oklab)
-            self.update()
+        self._selected_colour = _as_oklab(oklab)
+        self.update()
 
     def indicator_position(self) -> tuple[float, float] | None:
         if self._selected_colour is None:
@@ -65,12 +69,16 @@ class SelectorWidget(QtWidgets.QWidget):
         return self._model.position_for_color(self._selected_colour, _widget_size(self))
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        image_area = self.rect()
+        if not event.rect().intersects(image_area):
+            return
+
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
         painter.setClipRect(event.rect())
 
         try:
-            image = _selector_image(self._model, self.width(), self.height())
+            image = self._selector_image()
         except ValueError:
             painter.end()
             return
@@ -83,7 +91,9 @@ class SelectorWidget(QtWidgets.QWidget):
         if event.button() != QtCore.Qt.LeftButton:
             event.ignore()
             return
+        self.setFocus(QtCore.Qt.MouseFocusReason)
         self._pressed = True
+        self._colour_before_drag = None if self._selected_colour is None else self._selected_colour.copy()
         self._preview_at(event.pos())
         event.accept()
 
@@ -103,7 +113,11 @@ class SelectorWidget(QtWidgets.QWidget):
         if colour is not None:
             self._selected_colour = colour
             self.update()
-            self.committed.emit(colour.copy())
+            self.committed.emit(colour)
+        else:
+            self._selected_colour = self._colour_before_drag
+            self.update()
+        self._colour_before_drag = None
         event.accept()
 
     def leaveEvent(self, event: QtCore.QEvent) -> None:
@@ -111,11 +125,46 @@ class SelectorWidget(QtWidgets.QWidget):
             self.previewed.emit(None)
         super().leaveEvent(event)
 
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        position = self.indicator_position()
+        if position is None:
+            position = ((self.width() - 1.0) / 2.0, (self.height() - 1.0) / 2.0)
+
+        x, y = position
+        key = event.key()
+        if key == QtCore.Qt.Key_Left:
+            x -= 1.0
+        elif key == QtCore.Qt.Key_Right:
+            x += 1.0
+        elif key == QtCore.Qt.Key_Up:
+            y -= 1.0
+        elif key == QtCore.Qt.Key_Down:
+            y += 1.0
+        elif key == QtCore.Qt.Key_Home:
+            x = 0.0
+        elif key == QtCore.Qt.Key_End:
+            x = self.width() - 1.0
+        else:
+            event.ignore()
+            return
+
+        point = QtCore.QPoint(_clamp_round(x, 0, self.width() - 1), _clamp_round(y, 0, self.height() - 1))
+        colour = self._colour_at(point)
+        if colour is None:
+            event.ignore()
+            return
+
+        self._selected_colour = colour
+        self.update()
+        self.previewed.emit(colour)
+        self.committed.emit(colour)
+        event.accept()
+
     def _preview_at(self, point: QtCore.QPoint) -> None:
         colour = self._colour_at(point)
         self._selected_colour = colour
         self.update()
-        self.previewed.emit(None if colour is None else colour.copy())
+        self.previewed.emit(colour)
 
     def _colour_at(self, point: QtCore.QPoint) -> np.ndarray | None:
         return self._model.color_at_position((point.x(), point.y()), _widget_size(self))
@@ -133,12 +182,29 @@ class SelectorWidget(QtWidgets.QWidget):
         painter.setPen(QtGui.QPen(QtCore.Qt.white, 1.5))
         painter.drawEllipse(outer, 5.0, 5.0)
 
+    def _selector_image(self) -> QtGui.QImage:
+        key = (self._model, self.width(), self.height())
+        if self._image_cache_key == key and self._image_cache is not None:
+            return self._image_cache
 
-def _selector_image(model: SelectorModel, width: int, height: int) -> QtGui.QImage:
-    rgba = np.ascontiguousarray(renderers.render_rgba(model, (width, height)))
-    bytes_per_line = int(rgba.strides[0])
-    image = QtGui.QImage(rgba.data, width, height, bytes_per_line, QtGui.QImage.Format_RGBA8888)
-    return image.copy()
+        rgba = renderers.render_rgba(self._model, (self.width(), self.height()))
+        bytes_per_line = int(rgba.strides[0])
+        image = QtGui.QImage(
+            rgba.data,
+            self.width(),
+            self.height(),
+            bytes_per_line,
+            QtGui.QImage.Format_RGBA8888,
+        )
+        self._image_cache_key = key
+        self._image_cache_buffer = rgba
+        self._image_cache = image
+        return image
+
+    def _clear_image_cache(self) -> None:
+        self._image_cache_key = None
+        self._image_cache_buffer = None
+        self._image_cache = None
 
 
 def _widget_size(widget: QtWidgets.QWidget) -> tuple[int, int]:
@@ -154,14 +220,5 @@ def _as_oklab(oklab: Sequence[float] | None) -> np.ndarray | None:
     return colour.copy()
 
 
-class _blocked_signals:
-    def __init__(self, obj: QtCore.QObject) -> None:
-        self._obj = obj
-        self._blocker: QtCore.QSignalBlocker | None = None
-
-    def __enter__(self):
-        self._blocker = QtCore.QSignalBlocker(self._obj)
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self._blocker = None
+def _clamp_round(value: float, lower: int, upper: int) -> int:
+    return max(lower, min(upper, round(value)))

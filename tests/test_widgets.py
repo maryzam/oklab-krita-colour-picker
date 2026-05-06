@@ -41,6 +41,10 @@ def test_invalid_release_does_not_commit(qtbot):
     qtbot.addWidget(widget)
     widget.show()
 
+    previous = widget.model.color_at_position((20, 40), _size(widget))
+    assert previous is not None
+    widget.set_selected_colour(previous)
+
     commits = []
     widget.committed.connect(commits.append)
 
@@ -61,6 +65,7 @@ def test_invalid_release_does_not_commit(qtbot):
     )
 
     assert commits == []
+    np.testing.assert_allclose(widget.selected_colour, previous)
 
 
 def test_programmatic_colour_update_blocks_widget_signals(qtbot):
@@ -82,6 +87,30 @@ def test_programmatic_colour_update_blocks_widget_signals(qtbot):
     assert previews == []
     assert commits == []
     np.testing.assert_allclose(widget.selected_colour, colour)
+
+
+def test_keyboard_nudge_emits_preview_and_commit(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(64, 32)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    start = widget.model.color_at_position((20, 10), _size(widget))
+    assert start is not None
+    widget.set_selected_colour(start)
+
+    previews = []
+    commits = []
+    widget.previewed.connect(previews.append)
+    widget.committed.connect(commits.append)
+
+    event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(widget, event)
+
+    assert event.isAccepted()
+    assert len(previews) == 1
+    assert len(commits) == 1
+    np.testing.assert_allclose(commits[0], widget.selected_colour)
 
 
 def test_indicator_position_comes_from_model(qtbot):
