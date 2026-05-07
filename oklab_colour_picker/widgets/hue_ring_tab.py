@@ -231,8 +231,12 @@ class _CentralPanel(QtWidgets.QWidget):
         self._lightness_slider.set_other_axis(chroma)
         gamut_max = float(color_math.max_chroma_for_lh(lightness, hue))
         effective_max = max(0.0, min(LIGHTNESS_CHART_CHROMA_MAX, gamut_max))
-        self._chroma_slider.set_max(effective_max)
-        self._chroma_slider.set_value(min(chroma, effective_max))
+        # The C slider's track length stays anchored to LIGHTNESS_CHART_CHROMA_MAX
+        # so the thumb's x-position depends only on the actual chroma value.
+        # Rescaling by per-hue gamut max would shift the thumb every time the
+        # user rotates the ring even though chroma is unchanged.
+        self._chroma_slider.set_gamut_max(effective_max)
+        self._chroma_slider.set_value(chroma)
         self._chroma_slider.set_other_axis(lightness)
         self._set_hue(hue)
 
@@ -289,6 +293,10 @@ class _OklchGradientSlider(QtWidgets.QWidget):
         self._value = 0.5 if axis == "L" else 0.1
         self._other = 0.1 if axis == "L" else 0.5
         self._hue = 0.0
+        # For the C slider, the per-(L, hue) sRGB gamut max — chroma values
+        # past this point are unreachable and rendered as a dimmed tail.
+        # Defaults to _max so L sliders simply skip the overlay.
+        self._gamut_max = self._max
         self._dragging = False
         self._gradient_cache_key: tuple | None = None
         self._gradient_cache_image: QtGui.QImage | None = None
@@ -303,12 +311,11 @@ class _OklchGradientSlider(QtWidgets.QWidget):
         self._value = clamped
         self.update()
 
-    def set_max(self, maximum: float) -> None:
-        new_max = max(0.0, float(maximum))
-        if new_max == self._max:
+    def set_gamut_max(self, gamut_max: float) -> None:
+        new_gamut = float(np.clip(gamut_max, 0.0, self._max))
+        if new_gamut == self._gamut_max:
             return
-        self._max = new_max
-        self._value = float(np.clip(self._value, 0.0, new_max))
+        self._gamut_max = new_gamut
         self.update()
 
     def set_other_axis(self, other: float) -> None:
@@ -333,6 +340,10 @@ class _OklchGradientSlider(QtWidgets.QWidget):
 
         image = self._gradient_image(rect.width(), rect.height())
         painter.drawImage(rect, image)
+        if self._gamut_max < self._max:
+            gamut_x = self._value_to_x(self._gamut_max)
+            tail = QtCore.QRect(gamut_x, rect.top(), rect.right() - gamut_x + 1, rect.height())
+            painter.fillRect(tail, QtGui.QColor(0, 0, 0, 140))
         painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 120), 1))
         painter.setBrush(QtCore.Qt.NoBrush)
         painter.drawRect(rect.adjusted(0, 0, -1, -1))
