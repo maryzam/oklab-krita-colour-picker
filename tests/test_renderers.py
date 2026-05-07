@@ -88,11 +88,15 @@ def test_lightness_renderer_preserves_coordinate_semantics_across_sizes(size):
     np.testing.assert_array_equal(rgba[y, x, :3], _quantize8(model.color_at_position((x, y), size)))
 
 
-def test_hue_lightness_renderer_alpha_matches_selectable_area():
+def test_hue_lightness_renderer_alpha_marks_per_hue_gamut():
     model = HueLightnessModel(hue=math.pi / 3.0)
-    rgba = render_rgba(model, (17, 9))
+    rgba = render_rgba(model, (101, 101))
 
-    assert np.all(rgba[..., 3] == 255)
+    # The left edge (chroma=0) is always in gamut; the right edge sits at the
+    # global max chroma which exceeds the per-hue cusp for almost every row.
+    assert np.all(rgba[:, 0, 3] == 255)
+    assert np.count_nonzero(rgba[..., 3] == 0) > 0
+    assert np.count_nonzero(rgba[..., 3] == 255) > 0
 
 
 def test_chroma_lightness_renderer_masks_out_interior_and_out_of_gamut_hues():

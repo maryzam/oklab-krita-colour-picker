@@ -335,3 +335,13 @@ def _oklab_hue_to_lms_coefficients(a_, b_):
         _OKLAB_TO_LMS[1, 1] * a_ + _OKLAB_TO_LMS[1, 2] * b_,
         _OKLAB_TO_LMS[2, 1] * a_ + _OKLAB_TO_LMS[2, 2] * b_,
     )
+
+
+def _compute_max_srgb_chroma(samples: int = 4096) -> float:
+    hues = np.linspace(0.0, math.tau, samples, endpoint=False)
+    _, chroma_cusp = find_cusp(np.cos(hues), np.sin(hues))
+    return float(np.max(chroma_cusp))
+
+
+MAX_SRGB_CHROMA = _compute_max_srgb_chroma()
+"""Largest OKLCh chroma reachable inside the sRGB gamut across all hues."""

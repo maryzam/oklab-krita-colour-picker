@@ -86,7 +86,12 @@ class LightnessSliceModel:
 
 @dataclass(frozen=True)
 class HueLightnessModel:
-    """Rectangular chroma/lightness selector at a fixed OKLab hue."""
+    """Chroma/lightness selector at a fixed OKLab hue.
+
+    The x axis spans absolute OKLCh chroma in ``[0, MAX_SRGB_CHROMA]``, so the
+    selectable region traces the per-hue sRGB gamut leaf rather than filling
+    the whole rectangle.
+    """
 
     hue: float
 
@@ -101,11 +106,11 @@ class HueLightnessModel:
 
         x, y, width, height = bounds
         lightness = 1.0 - y / (height - 1.0)
-        chroma_fraction = x / (width - 1.0)
+        chroma = (x / (width - 1.0)) * color_math.MAX_SRGB_CHROMA
         max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
-        if max_chroma <= CHROMA_EPSILON:
-            return color_math.oklch_to_oklab([lightness, 0.0, self.hue])
-        return color_math.oklch_to_oklab([lightness, chroma_fraction * max_chroma, self.hue])
+        if chroma > max_chroma + CHROMA_EPSILON:
+            return None
+        return color_math.oklch_to_oklab([lightness, chroma, self.hue])
 
     def colors_at_positions(
         self,
@@ -117,14 +122,15 @@ class HueLightnessModel:
         if bounds is None:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
 
-        x, y, width, height, valid = bounds
+        x, y, width, height, in_bounds = bounds
         lightness = 1.0 - y / (height - 1.0)
-        chroma_fraction = x / (width - 1.0)
+        chroma = (x / (width - 1.0)) * color_math.MAX_SRGB_CHROMA
         max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
+        valid = in_bounds & (chroma <= max_chroma + CHROMA_EPSILON)
         oklch = np.stack(
             (
                 lightness,
-                chroma_fraction * max_chroma,
+                chroma,
                 np.full_like(lightness, self.hue, dtype=float),
             ),
             axis=-1,
@@ -144,18 +150,16 @@ class HueLightnessModel:
             return None
 
         lightness = float(np.clip(lightness, 0.0, 1.0))
+        chroma = max(0.0, float(chroma))
         max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
-        if max_chroma <= CHROMA_EPSILON:
-            chroma_fraction = 0.0 if chroma <= CHROMA_EPSILON else math.inf
-        else:
-            chroma_fraction = chroma / max_chroma
-        if chroma_fraction > 1.0 + POSITION_EPSILON:
+        if chroma > max_chroma + CHROMA_EPSILON:
+            return None
+        if chroma > color_math.MAX_SRGB_CHROMA + CHROMA_EPSILON:
             return None
 
-        # L=0 and L=1 are achromatic bands: every x maps to the same colour,
-        # so inverse placement uses the left edge as the canonical position.
+        chroma_fraction = min(chroma / color_math.MAX_SRGB_CHROMA, 1.0)
         return (
-            float(np.clip(chroma_fraction, 0.0, 1.0) * (width - 1.0)),
+            float(chroma_fraction * (width - 1.0)),
             float((1.0 - lightness) * (height - 1.0)),
         )
 
