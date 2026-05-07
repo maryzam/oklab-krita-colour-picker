@@ -136,6 +136,35 @@ def test_emit_clamps_chroma_against_per_lightness_gamut(qtbot):
     assert new_c <= gamut_max + 1e-9
 
 
+def test_ring_click_at_zero_chroma_captures_hue_for_subsequent_chroma_drag(qtbot):
+    # Default Hue Ring state: model chroma == 0, selected colour achromatic.
+    # The ring click then produces an achromatic OKLab too, so OKLab→OKLCh
+    # cannot recover the hue — the wrapper must learn the hue from the click
+    # geometry itself, otherwise raising chroma snaps to red regardless of
+    # where the user clicked.
+    achromatic = color_math.oklch_to_oklab([0.5, 0.0, 0.0])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.0, selected=achromatic)
+
+    ring = widget.findChild(SelectorWidget)
+    assert ring is not None
+
+    cx = (ring.width() - 1) // 2
+    target = QtCore.QPoint(cx, 5)  # top of ring → hue ≈ π/2
+    _send_mouse(ring, QtCore.QEvent.MouseButtonPress, target)
+    _send_mouse(ring, QtCore.QEvent.MouseButtonRelease, target)
+
+    c_slider = _slider(widget, axis="C")
+    commits, _ = _capture_signals(widget)
+    midpoint = QtCore.QPoint(c_slider.width() // 2, c_slider.height() // 2)
+    _send_mouse(c_slider, QtCore.QEvent.MouseButtonPress, midpoint)
+    _send_mouse(c_slider, QtCore.QEvent.MouseButtonRelease, midpoint)
+
+    assert len(commits) == 1
+    _, new_c, new_h = color_math.oklab_to_oklch(commits[0])
+    assert new_c > 0.0
+    assert _hue_diff(new_h, math.pi / 2.0) < math.radians(2.0)
+
+
 def test_widget_exposes_selector_surface_used_by_dock(qtbot):
     initial = color_math.oklch_to_oklab([0.4, 0.08, math.radians(120.0)])
     widget = _build_widget(qtbot, initial_lightness=0.4, initial_chroma=0.08, selected=initial)

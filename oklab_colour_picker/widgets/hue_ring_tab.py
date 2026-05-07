@@ -35,6 +35,11 @@ class HueRingTabWidget(QtWidgets.QWidget):
         self._ring = SelectorWidget(model, self)
         self._ring.previewed.connect(self._on_ring_previewed)
         self._ring.committed.connect(self._on_ring_committed)
+        # OKLab→OKLCh cannot recover hue when the model's chroma is zero
+        # (default startup, or after a C-slider drag to 0): the ring's
+        # emitted colour is achromatic. Watch the ring's mouse events
+        # directly so we can lift the hue from the click geometry.
+        self._ring.installEventFilter(self)
 
         self._panel = _CentralPanel(self)
         self._panel.lightness_previewed.connect(lambda v: self._emit_axis_change("L", v, commit=False))
@@ -83,6 +88,33 @@ class HueRingTabWidget(QtWidgets.QWidget):
         cx, cy = self.width() / 2.0, self.height() / 2.0
         self._panel.setGeometry(int(cx - side / 2), int(cy - side / 2), side, side)
         self._panel.setVisible(side >= 60)
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if obj is self._ring and event.type() in (
+            QtCore.QEvent.MouseButtonPress,
+            QtCore.QEvent.MouseMove,
+            QtCore.QEvent.MouseButtonRelease,
+        ):
+            self._capture_hue_from_ring_position(event.pos())
+        return super().eventFilter(obj, event)
+
+    def _capture_hue_from_ring_position(self, pos: QtCore.QPoint) -> None:
+        width, height = self._ring.width(), self._ring.height()
+        if width <= 1 or height <= 1:
+            return
+        # Only honour clicks that fall on the donut band: the ring model's
+        # ``color_at_position`` returns None for the centre, the corners, and
+        # any out-of-gamut hue at the current (L, C). That keeps stray
+        # corner clicks from rotating the saved hue.
+        if self._ring.model.color_at_position((pos.x(), pos.y()), (width, height)) is None:
+            return
+        center_x = (width - 1) / 2.0
+        center_y = (height - 1) / 2.0
+        dx = float(pos.x()) - center_x
+        dy = center_y - float(pos.y())
+        if math.hypot(dx, dy) <= 1e-9:
+            return
+        self._chosen_hue = math.atan2(dy, dx) % math.tau
 
     def _on_ring_previewed(self, oklab: object) -> None:
         self._capture_hue_if_chromatic(oklab)
