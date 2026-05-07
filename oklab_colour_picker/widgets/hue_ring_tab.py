@@ -16,6 +16,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
+    CHROMA_EPSILON,
     CHROMA_LIGHTNESS_INNER_RADIUS_FRACTION,
     LIGHTNESS_CHART_CHROMA_MAX,
     ChromaLightnessModel,
@@ -32,8 +33,8 @@ class HueRingTabWidget(QtWidgets.QWidget):
     def __init__(self, model: ChromaLightnessModel, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._ring = SelectorWidget(model, self)
-        self._ring.previewed.connect(self.previewed.emit)
-        self._ring.committed.connect(self.committed.emit)
+        self._ring.previewed.connect(self._on_ring_previewed)
+        self._ring.committed.connect(self._on_ring_committed)
 
         self._panel = _CentralPanel(self)
         self._panel.lightness_previewed.connect(lambda v: self._emit_axis_change("L", v, commit=False))
@@ -41,7 +42,11 @@ class HueRingTabWidget(QtWidgets.QWidget):
         self._panel.chroma_previewed.connect(lambda v: self._emit_axis_change("C", v, commit=False))
         self._panel.chroma_committed.connect(lambda v: self._emit_axis_change("C", v, commit=True))
 
-        self._selected: np.ndarray | None = None
+        # Hue is undefined whenever the selected colour is achromatic
+        # (chroma ~= 0), so OKLab→OKLCh would collapse the user's chosen hue
+        # to 0. Track it separately and only refresh from OKLab when the
+        # incoming colour actually carries hue information.
+        self._chosen_hue: float = 0.0
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.setMinimumSize(self._ring.minimumSize())
         self._sync_panel_from_model()
@@ -50,12 +55,22 @@ class HueRingTabWidget(QtWidgets.QWidget):
     def model(self) -> ChromaLightnessModel:
         return self._ring.model
 
+    @property
+    def selected_colour(self) -> np.ndarray | None:
+        return self._ring.selected_colour
+
+    def indicator_position(self) -> tuple[float, float] | None:
+        return self._ring.indicator_position()
+
     def set_model(self, model: ChromaLightnessModel) -> None:
         self._ring.set_model(model)
         self._sync_panel_from_model()
 
     def set_selected_colour(self, oklab: Sequence[float] | None) -> None:
-        self._selected = None if oklab is None else np.asarray(oklab, dtype=float)
+        if oklab is not None:
+            _, chroma, hue = color_math.oklab_to_oklch(np.asarray(oklab, dtype=float))
+            if float(chroma) > CHROMA_EPSILON:
+                self._chosen_hue = float(hue) % math.tau
         self._ring.set_selected_colour(oklab)
         self._sync_panel_from_model()
 
@@ -69,30 +84,47 @@ class HueRingTabWidget(QtWidgets.QWidget):
         self._panel.setGeometry(int(cx - side / 2), int(cy - side / 2), side, side)
         self._panel.setVisible(side >= 60)
 
-    def _current_hue(self) -> float:
-        if self._selected is None:
-            return 0.0
-        _, _, hue = color_math.oklab_to_oklch(self._selected)
-        return float(hue % math.tau)
+    def _on_ring_previewed(self, oklab: object) -> None:
+        self._capture_hue_if_chromatic(oklab)
+        self.previewed.emit(oklab)
+
+    def _on_ring_committed(self, oklab: object) -> None:
+        self._capture_hue_if_chromatic(oklab)
+        self.committed.emit(oklab)
+
+    def _capture_hue_if_chromatic(self, oklab: object) -> None:
+        if oklab is None:
+            return
+        _, chroma, hue = color_math.oklab_to_oklch(np.asarray(oklab, dtype=float))
+        if float(chroma) > CHROMA_EPSILON:
+            self._chosen_hue = float(hue) % math.tau
 
     def _sync_panel_from_model(self) -> None:
         model = self._ring.model
-        hue = self._current_hue()
-        self._panel.set_axes(lightness=model.lightness, chroma=model.chroma, hue=hue)
-        if self._selected is not None:
-            self._panel.set_swatch_colour(self._selected)
+        self._panel.set_axes(lightness=model.lightness, chroma=model.chroma, hue=self._chosen_hue)
+        selected = self._ring.selected_colour
+        if selected is not None:
+            self._panel.set_swatch_colour(selected)
 
     def _emit_axis_change(self, axis: str, value: float, commit: bool) -> None:
-        if self._selected is None:
-            base_l, base_c, base_h = self.model.lightness, self.model.chroma, 0.0
+        selected = self._ring.selected_colour
+        if selected is None:
+            base_l, base_c = self.model.lightness, self.model.chroma
         else:
-            base_l, base_c, base_h = (float(v) for v in color_math.oklab_to_oklch(self._selected))
+            base_l, base_c, _ = (float(v) for v in color_math.oklab_to_oklch(selected))
+        base_h = self._chosen_hue
         if axis == "L":
             new_l = float(np.clip(value, 0.0, 1.0))
             new_c = base_c
         else:
             new_l = base_l
             new_c = max(0.0, float(value))
+        # Clamp chroma against the per-(L, hue) gamut so we never emit OKLCh
+        # outside sRGB; otherwise the adapter would clip silently and the
+        # dock/swatch would drift away from the colour committed to Krita.
+        max_c = float(color_math.max_chroma_for_lh(new_l, base_h))
+        if new_c > max_c:
+            new_c = max(0.0, max_c)
         oklab = np.asarray(color_math.oklch_to_oklab([new_l, new_c, base_h]), dtype=float)
         (self.committed if commit else self.previewed).emit(oklab)
 
@@ -133,7 +165,10 @@ class _CentralPanel(QtWidgets.QWidget):
     def set_axes(self, lightness: float, chroma: float, hue: float) -> None:
         self._lightness_slider.set_value(lightness)
         self._lightness_slider.set_other_axis(chroma)
-        self._chroma_slider.set_value(chroma)
+        gamut_max = float(color_math.max_chroma_for_lh(lightness, hue))
+        effective_max = max(0.0, min(LIGHTNESS_CHART_CHROMA_MAX, gamut_max))
+        self._chroma_slider.set_max(effective_max)
+        self._chroma_slider.set_value(min(chroma, effective_max))
         self._chroma_slider.set_other_axis(lightness)
         self._set_hue(hue)
 
@@ -191,20 +226,38 @@ class _OklchGradientSlider(QtWidgets.QWidget):
         self._other = 0.1 if axis == "L" else 0.5
         self._hue = 0.0
         self._dragging = False
-        self._buffer: np.ndarray | None = None
+        self._gradient_cache_key: tuple | None = None
+        self._gradient_cache_image: QtGui.QImage | None = None
+        self._gradient_cache_buffer: np.ndarray | None = None
         self.setMinimumHeight(self._TRACK_HEIGHT + 2 * self._MARGIN)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
 
     def set_value(self, value: float) -> None:
-        self._value = float(np.clip(value, 0.0, self._max))
+        clamped = float(np.clip(value, 0.0, max(0.0, self._max)))
+        if clamped == self._value:
+            return
+        self._value = clamped
+        self.update()
+
+    def set_max(self, maximum: float) -> None:
+        new_max = max(0.0, float(maximum))
+        if new_max == self._max:
+            return
+        self._max = new_max
+        self._value = float(np.clip(self._value, 0.0, new_max))
         self.update()
 
     def set_other_axis(self, other: float) -> None:
+        if float(other) == self._other:
+            return
         self._other = float(other)
         self.update()
 
     def set_hue(self, hue_radians: float) -> None:
-        self._hue = float(hue_radians) % math.tau
+        new_hue = float(hue_radians) % math.tau
+        if new_hue == self._hue:
+            return
+        self._hue = new_hue
         self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
@@ -278,6 +331,13 @@ class _OklchGradientSlider(QtWidgets.QWidget):
         return float(np.clip(fraction, 0.0, 1.0)) * self._max
 
     def _gradient_image(self, width: int, height: int) -> QtGui.QImage:
+        # Drag-only repaints (where the user moves the thumb) keep axis,
+        # other, hue and max constant — recomputing the OKLCh→sRGB gradient
+        # for every move would be wasted colour-math work, so cache by inputs.
+        key = (self._axis, width, height, self._other, self._hue, self._max)
+        if self._gradient_cache_key == key and self._gradient_cache_image is not None:
+            return self._gradient_cache_image
+
         ts = np.linspace(0.0, 1.0, width)
         if self._axis == "L":
             lightness = ts
@@ -295,7 +355,10 @@ class _OklchGradientSlider(QtWidgets.QWidget):
         rgba_row[0, :, :3] = rgb
         rgba_row[0, :, 3] = 255
         rgba = np.ascontiguousarray(np.repeat(rgba_row, height, axis=0))
-        self._buffer = rgba
-        return QtGui.QImage(
+        image = QtGui.QImage(
             rgba.data, width, height, width * 4, QtGui.QImage.Format_RGBA8888
         )
+        self._gradient_cache_key = key
+        self._gradient_cache_buffer = rgba
+        self._gradient_cache_image = image
+        return image
