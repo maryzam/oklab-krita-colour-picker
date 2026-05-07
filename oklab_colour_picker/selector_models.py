@@ -22,6 +22,10 @@ AB_EPSILON = 1e-9
 CHROMA_EPSILON = 1e-9
 LIGHTNESS_EPSILON = 1e-9
 CHROMA_LIGHTNESS_RING_HALF_WIDTH = 0.5
+# Donut hole sized to host the in-tab swatch + L/C sliders. Inner edge sits at
+# 55% of the outer radius; the half-pixel band rule still applies for tiny
+# widgets where 55% would collapse to a single ring of pixels.
+CHROMA_LIGHTNESS_INNER_RADIUS_FRACTION = 0.55
 
 # Chart x-axis extent for the Lightness tab. Trades a small margin past the
 # sRGB cusp (~0.3225) for a tighter widget — we deliberately do not match
@@ -335,7 +339,9 @@ def _radius_for_size(size: Sequence[float]) -> float:
 
 def _on_chroma_lightness_ring(normalized_radius, radius):
     assert radius > 0.0
-    return normalized_radius >= max(0.0, 1.0 - CHROMA_LIGHTNESS_RING_HALF_WIDTH / radius)
+    half_pixel_inner = 1.0 - CHROMA_LIGHTNESS_RING_HALF_WIDTH / radius
+    inner = min(CHROMA_LIGHTNESS_INNER_RADIUS_FRACTION, half_pixel_inner)
+    return normalized_radius >= max(0.0, inner)
 
 
 def _empty_color_grid(x):
