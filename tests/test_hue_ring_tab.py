@@ -14,7 +14,11 @@ from oklab_colour_picker.selector_models import (
     ChromaLightnessModel,
 )
 from oklab_colour_picker.widgets import HueRingTabWidget, SelectorWidget
-from oklab_colour_picker.widgets.hue_ring_tab import _OklchGradientSlider
+from oklab_colour_picker.widgets.hue_ring_tab import (
+    _HueRingSelector,
+    _OklchGradientSlider,
+    _Swatch,
+)
 
 
 def test_lightness_slider_commits_oklab_with_new_l_and_preserved_hue(qtbot):
@@ -308,6 +312,43 @@ def test_ring_drag_does_not_change_lightness_slider_value(qtbot):
 
     assert l_slider._value == pytest.approx(lightness)
     assert l_slider._value_to_x(l_slider._value) == initial_thumb_x
+
+
+def test_sliders_have_visible_axis_labels(qtbot):
+    # UX: each slider gets a small "L" / "C" label so the axis is obvious
+    # without hovering or guessing from gradient direction.
+    initial = color_math.oklch_to_oklab([0.5, 0.05, 0.0])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.05, selected=initial)
+
+    label_texts = {label.text() for label in widget.findChildren(QtWidgets.QLabel)}
+    assert "L" in label_texts
+    assert "C" in label_texts
+
+
+def test_hue_text_is_painted_on_swatch_not_in_separate_label(qtbot):
+    # UX: the hue readout sits over the swatch (saving vertical space and
+    # keeping the central panel compact). No standalone "H ..." QLabel
+    # should remain in the widget tree.
+    initial_hue = math.radians(120.0)
+    initial = color_math.oklch_to_oklab([0.5, 0.05, initial_hue])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.05, selected=initial)
+
+    label_texts = [label.text() for label in widget.findChildren(QtWidgets.QLabel)]
+    assert not any(text.startswith("H ") for text in label_texts)
+
+    swatch = widget.findChild(_Swatch)
+    assert swatch is not None
+    assert "120" in swatch._hue_text
+
+
+def test_hue_ring_uses_radial_bar_indicator(qtbot):
+    # The hue ring's indicator is a radial bar (selects the whole hue slice),
+    # not the small circle the base SelectorWidget paints.
+    initial = color_math.oklch_to_oklab([0.5, 0.05, math.radians(0.0)])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.05, selected=initial)
+
+    ring = widget.findChild(SelectorWidget)
+    assert isinstance(ring, _HueRingSelector)
 
 
 def test_widget_exposes_selector_surface_used_by_dock(qtbot):

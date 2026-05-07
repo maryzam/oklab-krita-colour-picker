@@ -17,9 +17,9 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
     CHROMA_EPSILON,
-    CHROMA_LIGHTNESS_INNER_RADIUS_FRACTION,
     LIGHTNESS_CHART_CHROMA_MAX,
     ChromaLightnessModel,
+    chroma_lightness_band_width,
 )
 from oklab_colour_picker.widgets.selector import SelectorWidget
 
@@ -32,7 +32,7 @@ class HueRingTabWidget(QtWidgets.QWidget):
 
     def __init__(self, model: ChromaLightnessModel, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self._ring = SelectorWidget(model, self)
+        self._ring = _HueRingSelector(model, self)
         self._ring.previewed.connect(self._on_ring_previewed)
         self._ring.committed.connect(self._on_ring_committed)
         # OKLab→OKLCh cannot recover hue when the model's chroma is zero
@@ -87,7 +87,7 @@ class HueRingTabWidget(QtWidgets.QWidget):
         super().resizeEvent(event)
         self._ring.setGeometry(0, 0, self.width(), self.height())
         outer_radius = (min(self.width(), self.height()) - 1) / 2.0
-        inner_radius = outer_radius * CHROMA_LIGHTNESS_INNER_RADIUS_FRACTION
+        inner_radius = max(0.0, outer_radius - chroma_lightness_band_width(outer_radius))
         side = max(0, int(inner_radius * math.sqrt(2)) - 6)
         cx, cy = self.width() / 2.0, self.height() / 2.0
         self._panel.setGeometry(int(cx - side / 2), int(cy - side / 2), side, side)
@@ -203,12 +203,6 @@ class _CentralPanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self._hue_label = QtWidgets.QLabel("H —", self)
-        self._hue_label.setAlignment(QtCore.Qt.AlignCenter)
-        bold = self._hue_label.font()
-        bold.setBold(True)
-        self._hue_label.setFont(bold)
-
         self._swatch = _Swatch(self)
         self._lightness_slider = _OklchGradientSlider("L", self)
         self._chroma_slider = _OklchGradientSlider("C", self)
@@ -221,10 +215,9 @@ class _CentralPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
-        layout.addWidget(self._hue_label)
         layout.addWidget(self._swatch, 1)
-        layout.addWidget(self._lightness_slider)
-        layout.addWidget(self._chroma_slider)
+        layout.addLayout(_labelled_row("L", self._lightness_slider))
+        layout.addLayout(_labelled_row("C", self._chroma_slider))
 
     def set_axes(self, lightness: float, chroma: float, hue: float) -> None:
         self._lightness_slider.set_value(lightness)
@@ -245,7 +238,7 @@ class _CentralPanel(QtWidgets.QWidget):
 
     def _set_hue(self, hue_radians: float) -> None:
         deg = (math.degrees(hue_radians) + 360.0) % 360.0
-        self._hue_label.setText(f"H {deg:.0f}°")
+        self._swatch.set_hue_text(f"H {deg:.0f}°")
         self._lightness_slider.set_hue(hue_radians)
         self._chroma_slider.set_hue(hue_radians)
 
@@ -254,6 +247,7 @@ class _Swatch(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._color = QtGui.QColor(0, 0, 0)
+        self._hue_text = ""
         self.setMinimumHeight(20)
 
     def set_colour(self, oklab: Sequence[float]) -> None:
@@ -262,12 +256,39 @@ class _Swatch(QtWidgets.QWidget):
         self._color = QtGui.QColor(int(rgb[0]), int(rgb[1]), int(rgb[2]))
         self.update()
 
+    def set_hue_text(self, text: str) -> None:
+        if text == self._hue_text:
+            return
+        self._hue_text = text
+        self.update()
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
         painter.fillRect(self.rect(), self._color)
         painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 160), 1))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        if self._hue_text:
+            self._paint_hue_text(painter)
         painter.end()
+
+    def _paint_hue_text(self, painter: QtGui.QPainter) -> None:
+        # Stroked text overlays the swatch — a dark halo plus a light fill keep
+        # the label legible regardless of the swatch colour.
+        font = painter.font()
+        font.setBold(True)
+        path = QtGui.QPainterPath()
+        metrics = QtGui.QFontMetricsF(font)
+        text_width = metrics.horizontalAdvance(self._hue_text)
+        x = (self.width() - text_width) / 2.0
+        y = metrics.ascent() + 4.0
+        path.addText(QtCore.QPointF(x, y), font, self._hue_text)
+        painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 220), 3.0))
+        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.drawPath(path)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(255, 255, 255, 240))
+        painter.drawPath(path)
 
 
 class _OklchGradientSlider(QtWidgets.QWidget):
@@ -437,3 +458,68 @@ class _OklchGradientSlider(QtWidgets.QWidget):
         self._gradient_cache_buffer = rgba
         self._gradient_cache_image = image
         return image
+
+
+def _labelled_row(text: str, slider: QtWidgets.QWidget) -> QtWidgets.QHBoxLayout:
+    label = QtWidgets.QLabel(text, slider.parentWidget())
+    label.setAlignment(QtCore.Qt.AlignCenter)
+    label.setFixedWidth(12)
+    bold = label.font()
+    bold.setBold(True)
+    label.setFont(bold)
+    row = QtWidgets.QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(4)
+    row.addWidget(label)
+    row.addWidget(slider, 1)
+    return row
+
+
+class _HueRingSelector(SelectorWidget):
+    """Hue ring with a radial-bar indicator instead of the default circle.
+
+    The bar spans the full donut band (with a small overhang at each end so
+    it reads as selecting the entire hue slice) and rotates with the current
+    hue. The painter rotates around the ring centre so the bar's geometry is
+    expressed in simple "distance along radius" coordinates.
+    """
+
+    _BAR_THICKNESS = 4.0
+    _BAR_OVERHANG = 3.0
+
+    def _paint_indicator(self, painter: QtGui.QPainter) -> None:
+        position = self.indicator_position()
+        if position is None:
+            return
+        outer_radius = (min(self.width(), self.height()) - 1) / 2.0
+        if outer_radius <= 0.0:
+            return
+        center_x = (self.width() - 1) / 2.0
+        center_y = (self.height() - 1) / 2.0
+        dx = position[0] - center_x
+        dy = center_y - position[1]
+        if math.hypot(dx, dy) <= 1e-9:
+            return
+        hue = math.atan2(dy, dx)
+        band = chroma_lightness_band_width(outer_radius)
+        inner_radius = max(0.0, outer_radius - band)
+        bar_inner = inner_radius - self._BAR_OVERHANG
+        bar_outer = outer_radius + self._BAR_OVERHANG
+        rect = QtCore.QRectF(
+            bar_inner,
+            -self._BAR_THICKNESS / 2.0,
+            bar_outer - bar_inner,
+            self._BAR_THICKNESS,
+        )
+
+        painter.save()
+        painter.translate(center_x, center_y)
+        # atan2 used widget-y-flipped coords (dy = center_y - pos.y), so the
+        # painter rotation has to flip back to Qt's y-down system.
+        painter.rotate(-math.degrees(hue))
+        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.setPen(QtGui.QPen(QtCore.Qt.black, 2.0))
+        painter.drawRect(rect)
+        painter.setPen(QtGui.QPen(QtCore.Qt.white, 1.0))
+        painter.drawRect(rect)
+        painter.restore()

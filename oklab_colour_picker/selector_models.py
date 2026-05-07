@@ -22,10 +22,16 @@ AB_EPSILON = 1e-9
 CHROMA_EPSILON = 1e-9
 LIGHTNESS_EPSILON = 1e-9
 CHROMA_LIGHTNESS_RING_HALF_WIDTH = 0.5
-# Donut hole sized to host the in-tab swatch + L/C sliders. Inner edge sits at
-# 55% of the outer radius; the half-pixel band rule still applies for tiny
-# widgets where 55% would collapse to a single ring of pixels.
-CHROMA_LIGHTNESS_INNER_RADIUS_FRACTION = 0.55
+# Donut band thickness: band_width = min(outer_radius * 0.5, 40 px). Capping
+# at 40 px keeps the donut from eating the dock on big monitors — past a
+# point a thicker band gives no extra hue precision, only wasted space.
+CHROMA_LIGHTNESS_BAND_FRACTION = 0.5
+CHROMA_LIGHTNESS_BAND_MAX_PX = 40.0
+
+
+def chroma_lightness_band_width(outer_radius: float) -> float:
+    """Pixel thickness of the hue donut at a given outer radius."""
+    return min(float(outer_radius) * CHROMA_LIGHTNESS_BAND_FRACTION, CHROMA_LIGHTNESS_BAND_MAX_PX)
 
 # Chart x-axis extent for the Lightness tab. Trades a small margin past the
 # sRGB cusp (~0.3225) for a tighter widget — we deliberately do not match
@@ -340,7 +346,8 @@ def _radius_for_size(size: Sequence[float]) -> float:
 def _on_chroma_lightness_ring(normalized_radius, radius):
     assert radius > 0.0
     half_pixel_inner = 1.0 - CHROMA_LIGHTNESS_RING_HALF_WIDTH / radius
-    inner = min(CHROMA_LIGHTNESS_INNER_RADIUS_FRACTION, half_pixel_inner)
+    band_inner = 1.0 - chroma_lightness_band_width(radius) / radius
+    inner = min(half_pixel_inner, band_inner)
     return normalized_radius >= max(0.0, inner)
 
 

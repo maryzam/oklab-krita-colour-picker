@@ -5,10 +5,12 @@ import pytest
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
+    CHROMA_LIGHTNESS_BAND_MAX_PX,
     LIGHTNESS_CHART_CHROMA_MAX,
     ChromaLightnessModel,
     HueLightnessModel,
     LightnessSliceModel,
+    chroma_lightness_band_width,
 )
 
 
@@ -203,13 +205,39 @@ def test_chroma_lightness_rejects_degenerate_size():
 def test_chroma_lightness_rejects_interior_positions_to_preserve_inverse_symmetry():
     model = ChromaLightnessModel(lightness=0.55, chroma=color_math.max_chroma_for_lh(0.55, 0.0) * 0.35)
 
-    assert model.color_at_position((75.0, 50.0), (101.0, 101.0)) is None
+    # Pixel sits ~10 px from the centre of a 101x101 widget — well inside the
+    # donut hole (outer radius 50, band width 25 → inner edge at 25 px).
+    assert model.color_at_position((60.0, 50.0), (101.0, 101.0)) is None
 
 
 def test_chroma_lightness_rejects_inverse_color_with_mismatched_chroma():
     model = ChromaLightnessModel(lightness=0.55, chroma=0.05)
 
     assert model.position_for_color(color_math.oklch_to_oklab([0.55, 0.06, 0.0]), (101.0, 101.0)) is None
+
+
+def test_chroma_lightness_band_width_uses_half_radius_below_cap():
+    # For small rings the band fills 50% of the outer radius, giving the user
+    # the full hue ring even on tiny widgets.
+    assert chroma_lightness_band_width(20.0) == pytest.approx(10.0)
+    assert chroma_lightness_band_width(60.0) == pytest.approx(30.0)
+
+
+def test_chroma_lightness_band_width_clamps_to_pixel_cap():
+    # On large widgets the band caps at CHROMA_LIGHTNESS_BAND_MAX_PX so the
+    # donut doesn't grow unbounded — extra width past the cap is wasted.
+    assert chroma_lightness_band_width(200.0) == pytest.approx(CHROMA_LIGHTNESS_BAND_MAX_PX)
+    assert chroma_lightness_band_width(1000.0) == pytest.approx(CHROMA_LIGHTNESS_BAND_MAX_PX)
+
+
+def test_chroma_lightness_band_thickness_caps_on_large_widget():
+    # Outer radius 100 → band capped at 40 px → inner edge at 60 px. A pixel
+    # 50 px from the centre should now sit inside the donut hole, even though
+    # the previous 55%-fraction rule would have placed it on the band.
+    model = ChromaLightnessModel(lightness=0.55, chroma=color_math.max_chroma_for_lh(0.55, 0.0) * 0.35)
+
+    assert model.color_at_position((50.0, 100.0), (201.0, 201.0)) is None
+    assert model.color_at_position((100.0 + 70.0, 100.0), (201.0, 201.0)) is not None
 
 
 @pytest.mark.parametrize("position", [(100.0, 50.0), (50.0, 0.0), (0.0, 50.0), (50.0, 100.0)])
