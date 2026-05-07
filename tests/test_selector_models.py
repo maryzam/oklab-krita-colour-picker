@@ -5,6 +5,7 @@ import pytest
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
+    LIGHTNESS_CHART_CHROMA_MAX,
     ChromaLightnessModel,
     HueLightnessModel,
     LightnessSliceModel,
@@ -66,15 +67,30 @@ def test_lightness_slice_round_trips_position_and_color(position):
     np.testing.assert_allclose(actual, position, atol=1e-9)
 
 
-def test_hue_lightness_maps_axes_to_lightness_and_gamut_relative_chroma():
+def test_lightness_chart_chroma_max_envelopes_srgb_cusp():
+    # Hardcoded chart extent must stay above the largest sRGB cusp chroma so
+    # the entire gamut leaf remains addressable on the picker.
+    hues = np.linspace(0.0, math.tau, 4096, endpoint=False)
+    _, chroma_cusp = color_math.find_cusp(np.cos(hues), np.sin(hues))
+    assert LIGHTNESS_CHART_CHROMA_MAX >= float(np.max(chroma_cusp))
+
+
+def test_hue_lightness_maps_x_to_absolute_chroma():
     model = HueLightnessModel(hue=1.25)
 
-    actual = model.color_at_position((50.0, 25.0), (101.0, 101.0))
+    actual = model.color_at_position((25.0, 25.0), (101.0, 101.0))
 
     lightness = 0.75
-    max_chroma = color_math.max_chroma_for_lh(lightness, 1.25)
-    expected = color_math.oklch_to_oklab([lightness, max_chroma * 0.5, 1.25])
+    chroma = 0.25 * LIGHTNESS_CHART_CHROMA_MAX
+    expected = color_math.oklch_to_oklab([lightness, chroma, 1.25])
     np.testing.assert_allclose(actual, expected, atol=1e-12)
+
+
+def test_hue_lightness_rejects_position_outside_per_hue_gamut():
+    model = HueLightnessModel(hue=0.0)
+    # Hue 0 (red) cusp chroma is well below LIGHTNESS_CHART_CHROMA_MAX, so the right
+    # edge at mid-lightness lies outside the achievable per-hue gamut.
+    assert model.color_at_position((100.0, 50.0), (101.0, 101.0)) is None
 
 
 @pytest.mark.parametrize("hue", [math.nan, math.inf, -math.inf])
@@ -89,11 +105,14 @@ def test_hue_lightness_normalizes_hue():
     assert model.hue == pytest.approx(0.25)
 
 
-def test_hue_lightness_top_and_bottom_rows_are_selectable_end_to_end():
+def test_hue_lightness_achromatic_endpoints_only_at_left_edge():
     model = HueLightnessModel(hue=0.0)
 
-    np.testing.assert_allclose(model.color_at_position((50.0, 0.0), (101.0, 101.0)), [1.0, 0.0, 0.0], atol=1e-12)
-    np.testing.assert_allclose(model.color_at_position((100.0, 100.0), (101.0, 101.0)), [0.0, 0.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(model.color_at_position((0.0, 0.0), (101.0, 101.0)), [1.0, 0.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(model.color_at_position((0.0, 100.0), (101.0, 101.0)), [0.0, 0.0, 0.0], atol=1e-12)
+    # Off the L=0/L=1 axis chroma must vanish, so positive x is out of gamut.
+    assert model.color_at_position((50.0, 0.0), (101.0, 101.0)) is None
+    assert model.color_at_position((50.0, 100.0), (101.0, 101.0)) is None
 
 
 @pytest.mark.parametrize(("color", "expected"), [([1.0, 0.0, 0.0], (0.0, 0.0)), ([0.0, 0.0, 0.0], (0.0, 100.0))])
@@ -111,7 +130,7 @@ def test_hue_lightness_rejects_degenerate_or_out_of_bounds_positions():
     assert model.color_at_position((50.0, -1.0), (101.0, 101.0)) is None
 
 
-@pytest.mark.parametrize("position", [(0.0, 50.0), (35.0, 20.0), (100.0, 75.0)])
+@pytest.mark.parametrize("position", [(0.0, 50.0), (15.0, 20.0), (10.0, 75.0)])
 def test_hue_lightness_round_trips_position_and_color(position):
     model = HueLightnessModel(hue=2.0)
 
