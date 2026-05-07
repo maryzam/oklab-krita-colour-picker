@@ -23,6 +23,12 @@ CHROMA_EPSILON = 1e-9
 LIGHTNESS_EPSILON = 1e-9
 CHROMA_LIGHTNESS_RING_HALF_WIDTH = 0.5
 
+# Chart x-axis extent for the Lightness tab. Trades a small margin past the
+# sRGB cusp (~0.3225) for a tighter widget — we deliberately do not match
+# oklch.com's 0.37 default. Validity is still gated by max_chroma_for_lh, so
+# any pixel whose chroma exceeds the per-hue gamut renders transparent.
+LIGHTNESS_CHART_CHROMA_MAX = 0.325
+
 Position = tuple[float, float]
 Size = tuple[float, float]
 
@@ -88,9 +94,9 @@ class LightnessSliceModel:
 class HueLightnessModel:
     """Chroma/lightness selector at a fixed OKLab hue.
 
-    The x axis spans absolute OKLCh chroma in ``[0, MAX_SRGB_CHROMA]``, so the
-    selectable region traces the per-hue sRGB gamut leaf rather than filling
-    the whole rectangle.
+    The x axis spans absolute OKLCh chroma in ``[0, LIGHTNESS_CHART_CHROMA_MAX]``,
+    so the selectable region traces the per-hue sRGB gamut leaf rather than
+    filling the whole rectangle.
     """
 
     hue: float
@@ -106,7 +112,7 @@ class HueLightnessModel:
 
         x, y, width, height = bounds
         lightness = 1.0 - y / (height - 1.0)
-        chroma = (x / (width - 1.0)) * color_math.MAX_SRGB_CHROMA
+        chroma = (x / (width - 1.0)) * LIGHTNESS_CHART_CHROMA_MAX
         max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
         if chroma > max_chroma + CHROMA_EPSILON:
             return None
@@ -124,7 +130,7 @@ class HueLightnessModel:
 
         x, y, width, height, in_bounds = bounds
         lightness = 1.0 - y / (height - 1.0)
-        chroma = (x / (width - 1.0)) * color_math.MAX_SRGB_CHROMA
+        chroma = (x / (width - 1.0)) * LIGHTNESS_CHART_CHROMA_MAX
         # max_chroma_for_lh depends only on lightness here (hue is fixed), so
         # collapse the grid to its unique lightnesses before invoking the
         # Halley-iterated gamut math, then scatter the result back.
@@ -159,10 +165,10 @@ class HueLightnessModel:
         max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
         if chroma > max_chroma + CHROMA_EPSILON:
             return None
-        if chroma > color_math.MAX_SRGB_CHROMA + CHROMA_EPSILON:
+        if chroma > LIGHTNESS_CHART_CHROMA_MAX + CHROMA_EPSILON:
             return None
 
-        chroma_fraction = min(chroma / color_math.MAX_SRGB_CHROMA, 1.0)
+        chroma_fraction = min(chroma / LIGHTNESS_CHART_CHROMA_MAX, 1.0)
         return (
             float(chroma_fraction * (width - 1.0)),
             float((1.0 - lightness) * (height - 1.0)),
