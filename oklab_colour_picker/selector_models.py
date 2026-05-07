@@ -125,7 +125,12 @@ class HueLightnessModel:
         x, y, width, height, in_bounds = bounds
         lightness = 1.0 - y / (height - 1.0)
         chroma = (x / (width - 1.0)) * color_math.MAX_SRGB_CHROMA
-        max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
+        # max_chroma_for_lh depends only on lightness here (hue is fixed), so
+        # collapse the grid to its unique lightnesses before invoking the
+        # Halley-iterated gamut math, then scatter the result back.
+        unique_lightness, inverse = np.unique(lightness, return_inverse=True)
+        max_chroma_unique = color_math.max_chroma_for_lh(unique_lightness, self.hue)
+        max_chroma = np.asarray(max_chroma_unique)[inverse].reshape(lightness.shape)
         valid = in_bounds & (chroma <= max_chroma + CHROMA_EPSILON)
         oklch = np.stack(
             (
