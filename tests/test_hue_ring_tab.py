@@ -165,6 +165,75 @@ def test_ring_click_at_zero_chroma_captures_hue_for_subsequent_chroma_drag(qtbot
     assert _hue_diff(new_h, math.pi / 2.0) < math.radians(2.0)
 
 
+def test_right_button_ring_press_does_not_rotate_chosen_hue(qtbot):
+    # SelectorWidget ignores non-left-button presses (event.ignore() in
+    # mousePressEvent). The hue capture filter must mirror that — a stray
+    # right-click should not silently rewrite the user's chosen hue.
+    chosen_hue = math.radians(45.0)
+    initial = color_math.oklch_to_oklab([0.5, 0.1, chosen_hue])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.1, selected=initial)
+    ring = widget.findChild(SelectorWidget)
+    assert ring is not None
+
+    cx = (ring.width() - 1) // 2
+    top_of_ring = QtCore.QPoint(cx, 5)  # geometrically implies hue ~ 90°
+    _send_mouse(ring, QtCore.QEvent.MouseButtonPress, top_of_ring, button=QtCore.Qt.RightButton)
+    _send_mouse(ring, QtCore.QEvent.MouseButtonRelease, top_of_ring, button=QtCore.Qt.RightButton)
+
+    c_slider = _slider(widget, axis="C")
+    commits, _ = _capture_signals(widget)
+    midpoint = QtCore.QPoint(c_slider.width() // 2, c_slider.height() // 2)
+    _send_mouse(c_slider, QtCore.QEvent.MouseButtonPress, midpoint)
+    _send_mouse(c_slider, QtCore.QEvent.MouseButtonRelease, midpoint)
+
+    assert len(commits) == 1
+    _, _, new_h = color_math.oklab_to_oklch(commits[0])
+    assert _hue_diff(new_h, chosen_hue) < 1e-9
+
+
+def test_cancelled_ring_drag_restores_chosen_hue(qtbot):
+    # SelectorWidget treats a release on an invalid position as a cancel —
+    # it restores _colour_before_drag and emits previewed(_colour_before_drag).
+    # When the pre-drag colour is *achromatic* the wrapper cannot recover the
+    # hue from that signal (chroma == 0), so the event filter itself must
+    # mirror SelectorWidget's accept/cancel lifecycle — otherwise a partial
+    # drag leaks the intermediate hue past the cancellation.
+    achromatic = color_math.oklch_to_oklab([0.5, 0.0, 0.0])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.0, selected=achromatic)
+    ring = widget.findChild(SelectorWidget)
+    assert ring is not None
+
+    cx = (ring.width() - 1) // 2
+    cy = (ring.height() - 1) // 2
+    radius = (min(ring.width(), ring.height()) - 1) / 2.0
+
+    # Step 1: capture an initial hue of ~45° via a completed ring click at C=0.
+    chosen_hue = math.radians(45.0)
+    chosen_x = int(round(cx + radius * 0.95 * math.cos(chosen_hue)))
+    chosen_y = int(round(cy - radius * 0.95 * math.sin(chosen_hue)))
+    chosen_point = QtCore.QPoint(chosen_x, chosen_y)
+    _send_mouse(ring, QtCore.QEvent.MouseButtonPress, chosen_point)
+    _send_mouse(ring, QtCore.QEvent.MouseButtonRelease, chosen_point)
+
+    # Step 2: start a fresh drag at the top of the ring (~90°), then bail out
+    # by releasing on an invalid corner — SelectorWidget cancels.
+    top = QtCore.QPoint(cx, 5)
+    invalid_corner = QtCore.QPoint(0, 0)
+    _send_mouse(ring, QtCore.QEvent.MouseButtonPress, top)
+    _send_mouse(ring, QtCore.QEvent.MouseMove, invalid_corner, buttons=QtCore.Qt.LeftButton)
+    _send_mouse(ring, QtCore.QEvent.MouseButtonRelease, invalid_corner)
+
+    c_slider = _slider(widget, axis="C")
+    commits, _ = _capture_signals(widget)
+    midpoint = QtCore.QPoint(c_slider.width() // 2, c_slider.height() // 2)
+    _send_mouse(c_slider, QtCore.QEvent.MouseButtonPress, midpoint)
+    _send_mouse(c_slider, QtCore.QEvent.MouseButtonRelease, midpoint)
+
+    assert len(commits) == 1
+    _, _, new_h = color_math.oklab_to_oklch(commits[0])
+    assert _hue_diff(new_h, chosen_hue) < math.radians(2.0)
+
+
 def test_widget_exposes_selector_surface_used_by_dock(qtbot):
     initial = color_math.oklch_to_oklab([0.4, 0.08, math.radians(120.0)])
     widget = _build_widget(qtbot, initial_lightness=0.4, initial_chroma=0.08, selected=initial)
@@ -202,9 +271,16 @@ def _capture_signals(widget: HueRingTabWidget):
     return commits, previews
 
 
-def _send_mouse(widget, event_type, position):
-    button = QtCore.Qt.LeftButton
-    buttons = QtCore.Qt.LeftButton if event_type != QtCore.QEvent.MouseButtonRelease else QtCore.Qt.NoButton
+def _send_mouse(widget, event_type, position, *, button=None, buttons=None):
+    if button is None:
+        button = QtCore.Qt.LeftButton if event_type != QtCore.QEvent.MouseMove else QtCore.Qt.NoButton
+    if buttons is None:
+        if event_type == QtCore.QEvent.MouseButtonRelease:
+            buttons = QtCore.Qt.NoButton
+        elif event_type == QtCore.QEvent.MouseMove:
+            buttons = QtCore.Qt.LeftButton
+        else:
+            buttons = button
     event = QtGui.QMouseEvent(
         event_type,
         QtCore.QPointF(position),
@@ -213,7 +289,8 @@ def _send_mouse(widget, event_type, position):
         QtCore.Qt.NoModifier,
     )
     QtWidgets.QApplication.sendEvent(widget, event)
-    assert event.isAccepted()
+    # Acceptance is not always guaranteed (e.g., right-clicks the widget
+    # ignores) — the test asserts on the resulting widget state instead.
 
 
 def _hue_diff(a: float, b: float) -> float:

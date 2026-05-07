@@ -52,6 +52,10 @@ class HueRingTabWidget(QtWidgets.QWidget):
         # to 0. Track it separately and only refresh from OKLab when the
         # incoming colour actually carries hue information.
         self._chosen_hue: float = 0.0
+        # Mirror SelectorWidget's left-button drag lifecycle so the hue
+        # capture filter only commits hue on accepted interactions.
+        self._ring_drag_active: bool = False
+        self._chosen_hue_before_drag: float | None = None
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.setMinimumSize(self._ring.minimumSize())
         self._sync_panel_from_model()
@@ -90,22 +94,50 @@ class HueRingTabWidget(QtWidgets.QWidget):
         self._panel.setVisible(side >= 60)
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
-        if obj is self._ring and event.type() in (
-            QtCore.QEvent.MouseButtonPress,
-            QtCore.QEvent.MouseMove,
-            QtCore.QEvent.MouseButtonRelease,
-        ):
-            self._capture_hue_from_ring_position(event.pos())
+        if obj is self._ring:
+            event_type = event.type()
+            if event_type == QtCore.QEvent.MouseButtonPress:
+                if event.button() == QtCore.Qt.LeftButton:
+                    self._begin_hue_drag()
+                    self._capture_hue_from_ring_position(event.pos())
+            elif event_type == QtCore.QEvent.MouseMove:
+                if self._ring_drag_active and (event.buttons() & QtCore.Qt.LeftButton):
+                    self._capture_hue_from_ring_position(event.pos())
+            elif event_type == QtCore.QEvent.MouseButtonRelease:
+                if event.button() == QtCore.Qt.LeftButton and self._ring_drag_active:
+                    self._end_hue_drag(event.pos())
         return super().eventFilter(obj, event)
+
+    def _begin_hue_drag(self) -> None:
+        self._ring_drag_active = True
+        self._chosen_hue_before_drag = self._chosen_hue
+
+    def _end_hue_drag(self, release_pos: QtCore.QPoint) -> None:
+        self._ring_drag_active = False
+        # SelectorWidget cancels the drag (restores _colour_before_drag) when
+        # the release lands on an invalid position. Mirror that for the
+        # captured hue, otherwise an intermediate position from a partial
+        # drag would silently overwrite the user's prior choice.
+        width, height = self._ring.width(), self._ring.height()
+        valid = (
+            width > 1
+            and height > 1
+            and self._ring.model.color_at_position(
+                (release_pos.x(), release_pos.y()), (width, height)
+            ) is not None
+        )
+        if not valid and self._chosen_hue_before_drag is not None:
+            self._chosen_hue = self._chosen_hue_before_drag
+        self._chosen_hue_before_drag = None
 
     def _capture_hue_from_ring_position(self, pos: QtCore.QPoint) -> None:
         width, height = self._ring.width(), self._ring.height()
         if width <= 1 or height <= 1:
             return
-        # Only honour clicks that fall on the donut band: the ring model's
+        # Only honour positions that fall on the donut band: the ring model's
         # ``color_at_position`` returns None for the centre, the corners, and
         # any out-of-gamut hue at the current (L, C). That keeps stray
-        # corner clicks from rotating the saved hue.
+        # off-band positions from rotating the saved hue.
         if self._ring.model.color_at_position((pos.x(), pos.y()), (width, height)) is None:
             return
         center_x = (width - 1) / 2.0
