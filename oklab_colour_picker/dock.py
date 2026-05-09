@@ -11,7 +11,7 @@ from PyQt5 import QtWidgets
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import ChromaLightnessModel, HueLightnessModel, LightnessSliceModel
-from oklab_colour_picker.widgets import HueRingTabWidget, SelectorWidget
+from oklab_colour_picker.widgets import HueRingTabWidget, LightnessSliceDiskWidget, SelectorWidget
 
 
 ForegroundListener = Callable[[Sequence[float]], None]
@@ -169,6 +169,8 @@ def _build_selector_widget(
 ) -> SelectorWidget | HueRingTabWidget:
     if mode == SelectorMode.CHROMA_LIGHTNESS:
         return HueRingTabWidget(model, parent)
+    if mode == SelectorMode.LIGHTNESS_SLICE:
+        return LightnessSliceDiskWidget(model, parent)
     return SelectorWidget(model, parent)
 
 
