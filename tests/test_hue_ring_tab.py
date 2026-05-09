@@ -9,9 +9,16 @@ pytest.importorskip("PyQt5")
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import color_math
-from oklab_colour_picker.selector_models import ChromaLightnessModel
+from oklab_colour_picker.selector_models import (
+    LIGHTNESS_CHART_CHROMA_MAX,
+    ChromaLightnessModel,
+)
 from oklab_colour_picker.widgets import HueRingTabWidget, SelectorWidget
-from oklab_colour_picker.widgets.hue_ring_tab import _OklchGradientSlider
+from oklab_colour_picker.widgets.hue_ring_tab import (
+    _HueRingSelector,
+    _OklchGradientSlider,
+    _Swatch,
+)
 
 
 def test_lightness_slider_commits_oklab_with_new_l_and_preserved_hue(qtbot):
@@ -232,6 +239,116 @@ def test_cancelled_ring_drag_restores_chosen_hue(qtbot):
     assert len(commits) == 1
     _, _, new_h = color_math.oklab_to_oklch(commits[0])
     assert _hue_diff(new_h, chosen_hue) < math.radians(2.0)
+
+
+def test_ring_drag_does_not_change_chroma_slider_value(qtbot):
+    # Regression: previously _CentralPanel.set_axes called set_max(per-hue
+    # gamut max) on the C slider, so the thumb's x-position rescaled every
+    # time the ring rotated even though chroma was unchanged. The slider
+    # must now keep the same _value and the same track length across hues.
+    initial_hue = math.radians(30.0)
+    initial_chroma = 0.05
+    initial = color_math.oklch_to_oklab([0.55, initial_chroma, initial_hue])
+    widget = _build_widget(qtbot, initial_lightness=0.55, initial_chroma=initial_chroma, selected=initial)
+
+    c_slider = _slider(widget, axis="C")
+    assert c_slider._value == pytest.approx(initial_chroma)
+    assert c_slider._max == pytest.approx(LIGHTNESS_CHART_CHROMA_MAX)
+    initial_thumb_x = c_slider._value_to_x(c_slider._value)
+
+    # Push the same chroma at a different hue back into the widget — this is
+    # the path that the dock takes during a ring drag (oklab is recomputed at
+    # the new hue but L/C are preserved).
+    new_hue = math.radians(210.0)
+    rotated = color_math.oklch_to_oklab([0.55, initial_chroma, new_hue])
+    widget.set_selected_colour(rotated)
+
+    assert c_slider._value == pytest.approx(initial_chroma)
+    assert c_slider._max == pytest.approx(LIGHTNESS_CHART_CHROMA_MAX)
+    assert c_slider._value_to_x(c_slider._value) == initial_thumb_x
+
+
+def test_ring_drag_updates_chroma_gamut_overlay(qtbot):
+    # The gamut tail overlay must follow the per-hue gamut so the user sees
+    # which portion of the C track is unreachable at the current hue, even
+    # though the track length itself stays constant.
+    hue_a = math.radians(30.0)
+    hue_b = math.radians(210.0)
+    gamut_a = float(color_math.max_chroma_for_lh(0.55, hue_a))
+    gamut_b = float(color_math.max_chroma_for_lh(0.55, hue_b))
+    # Sanity: pick lightness/hues where the two gamut maxima differ enough to
+    # make the assertion meaningful — otherwise the test would pass trivially.
+    assert abs(gamut_a - gamut_b) > 1e-3
+
+    initial = color_math.oklch_to_oklab([0.55, 0.05, hue_a])
+    widget = _build_widget(qtbot, initial_lightness=0.55, initial_chroma=0.05, selected=initial)
+
+    c_slider = _slider(widget, axis="C")
+    expected_a = min(LIGHTNESS_CHART_CHROMA_MAX, gamut_a)
+    assert c_slider._gamut_max == pytest.approx(expected_a)
+
+    rotated = color_math.oklch_to_oklab([0.55, 0.05, hue_b])
+    widget.set_selected_colour(rotated)
+
+    expected_b = min(LIGHTNESS_CHART_CHROMA_MAX, gamut_b)
+    assert c_slider._gamut_max == pytest.approx(expected_b)
+
+
+def test_ring_drag_does_not_change_lightness_slider_value(qtbot):
+    # Symmetric regression for the L slider — its _max is constant at 1.0
+    # so the thumb position should track only the lightness value, which is
+    # untouched by ring rotation.
+    hue_a = math.radians(60.0)
+    hue_b = math.radians(300.0)
+    lightness = 0.42
+    initial = color_math.oklch_to_oklab([lightness, 0.04, hue_a])
+    widget = _build_widget(qtbot, initial_lightness=lightness, initial_chroma=0.04, selected=initial)
+
+    l_slider = _slider(widget, axis="L")
+    initial_thumb_x = l_slider._value_to_x(l_slider._value)
+
+    rotated = color_math.oklch_to_oklab([lightness, 0.04, hue_b])
+    widget.set_selected_colour(rotated)
+
+    assert l_slider._value == pytest.approx(lightness)
+    assert l_slider._value_to_x(l_slider._value) == initial_thumb_x
+
+
+def test_sliders_have_visible_axis_labels(qtbot):
+    # UX: each slider gets a small "L" / "C" label so the axis is obvious
+    # without hovering or guessing from gradient direction.
+    initial = color_math.oklch_to_oklab([0.5, 0.05, 0.0])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.05, selected=initial)
+
+    label_texts = {label.text() for label in widget.findChildren(QtWidgets.QLabel)}
+    assert "L" in label_texts
+    assert "C" in label_texts
+
+
+def test_hue_text_is_painted_on_swatch_not_in_separate_label(qtbot):
+    # UX: the hue readout sits over the swatch (saving vertical space and
+    # keeping the central panel compact). No standalone "H ..." QLabel
+    # should remain in the widget tree.
+    initial_hue = math.radians(120.0)
+    initial = color_math.oklch_to_oklab([0.5, 0.05, initial_hue])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.05, selected=initial)
+
+    label_texts = [label.text() for label in widget.findChildren(QtWidgets.QLabel)]
+    assert not any(text.startswith("H ") for text in label_texts)
+
+    swatch = widget.findChild(_Swatch)
+    assert swatch is not None
+    assert "120" in swatch._hue_text
+
+
+def test_hue_ring_uses_radial_bar_indicator(qtbot):
+    # The hue ring's indicator is a radial bar (selects the whole hue slice),
+    # not the small circle the base SelectorWidget paints.
+    initial = color_math.oklch_to_oklab([0.5, 0.05, math.radians(0.0)])
+    widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.05, selected=initial)
+
+    ring = widget.findChild(SelectorWidget)
+    assert isinstance(ring, _HueRingSelector)
 
 
 def test_widget_exposes_selector_surface_used_by_dock(qtbot):
