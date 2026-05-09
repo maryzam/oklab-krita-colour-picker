@@ -35,18 +35,63 @@ def test_disk_widget_picks_through_overlay(qtbot):
     np.testing.assert_allclose(commits[0], expected)
 
 
-def test_disk_widget_paints_without_error(qtbot):
-    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
-    widget.resize(80, 80)
-    qtbot.addWidget(widget)
-    widget.show()
+def test_disk_widget_renders_overlay_pixels_on_top_of_base(qtbot):
+    # Render the disk widget twice at the same model and size: once with the
+    # overlay subclass, once with the bare SelectorWidget that paints only
+    # the disk image. Both share the same disk pixels, so any rendered
+    # difference comes from the rings + gamut contour the subclass adds.
+    from oklab_colour_picker.widgets.selector import SelectorWidget
 
+    model = LightnessSliceModel(lightness=0.5)
+    overlay = LightnessSliceDiskWidget(model)
+    overlay.resize(81, 81)
+    qtbot.addWidget(overlay)
+    overlay.show()
+
+    bare = SelectorWidget(model)
+    bare.resize(81, 81)
+    qtbot.addWidget(bare)
+    bare.show()
+
+    overlay_pixels = _render_to_rgba_array(overlay)
+    bare_pixels = _render_to_rgba_array(bare)
+
+    assert overlay_pixels.shape == bare_pixels.shape
+    diff = np.any(overlay_pixels != bare_pixels, axis=-1)
+    differing_pixels = int(diff.sum())
+
+    # The contour stroke alone covers ~360 sampled hues × ~3 px (halo + stroke)
+    # plus five chroma rings, so the difference should be substantial — in
+    # the hundreds of pixels — not a stray rounding artifact.
+    assert differing_pixels > 200
+
+    # And the overlay must reach across the disk: the C=0.05 ring sits well
+    # inside the leaf at every hue, so at least one of the four cardinal
+    # samples on that ring must differ from the bare render.
+    cx, cy = 40.0, 40.0
+    radius_px = 40.0 * (0.05 / LIGHTNESS_CHART_CHROMA_MAX)
+    cardinals = [
+        (int(round(cx + radius_px)), int(cy)),
+        (int(round(cx - radius_px)), int(cy)),
+        (int(cx), int(round(cy + radius_px))),
+        (int(cx), int(round(cy - radius_px))),
+    ]
+    differs_on_inner_ring = any(
+        diff[y, x] for x, y in cardinals
+    )
+    assert differs_on_inner_ring
+
+
+def _render_to_rgba_array(widget) -> np.ndarray:
     image = QtGui.QImage(widget.size(), QtGui.QImage.Format_ARGB32)
     image.fill(0)
     widget.render(image)
-    # render() throws on its own if the paint path errors; just confirm
-    # something landed on the buffer by checking byte count.
-    assert image.byteCount() > 0
+    # Format_ARGB32 packs 0xAARRGGBB as uint32; on little-endian the bytes
+    # land as B, G, R, A. Re-pack as RGBA so channel asserts read naturally.
+    ptr = image.bits()
+    ptr.setsize(image.byteCount())
+    raw = np.frombuffer(ptr, dtype=np.uint8).reshape(image.height(), image.width(), 4).copy()
+    return np.dstack((raw[..., 2], raw[..., 1], raw[..., 0], raw[..., 3]))
 
 
 def test_set_model_invalidates_gamut_path_cache(qtbot):
