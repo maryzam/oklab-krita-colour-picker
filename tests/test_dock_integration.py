@@ -106,6 +106,41 @@ def test_indicator_maps_to_same_colour_after_resize(qtbot):
     assert actual == pytest.approx(expected, abs=1.0)
 
 
+def test_chroma_readout_reflects_selected_colour(qtbot):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+
+    colour = color_math.oklch_to_oklab([0.5, 0.142, math.pi / 3.0])
+    panel.set_selected_colour(colour)
+
+    assert panel._chroma_readout.text() == "C 0.142"
+
+
+def test_chroma_readout_updates_on_external_foreground_sync(qtbot):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+
+    controller.emit_foreground(color_math.oklch_to_oklab([0.6, 0.077, 1.0]))
+
+    assert panel._chroma_readout.text() == "C 0.077"
+
+
+def test_chroma_readout_persists_across_tab_changes(qtbot):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    colour = color_math.oklch_to_oklab([0.7, 0.123, 0.5])
+    panel.set_selected_colour(colour)
+
+    text = panel._chroma_readout.text()
+    panel.set_mode(SelectorMode.HUE_LIGHTNESS)
+    assert panel._chroma_readout.text() == text
+    panel.set_mode(SelectorMode.CHROMA_LIGHTNESS)
+    assert panel._chroma_readout.text() == text
+
+
 def test_qdock_visibility_signal_reaches_controller(qtbot):
     controller = FakeController()
     dock = QtWidgets.QDockWidget()
