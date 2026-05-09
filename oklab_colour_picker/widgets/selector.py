@@ -36,6 +36,7 @@ class SelectorWidget(QtWidgets.QWidget):
         self._model = model
         self._selected_colour: np.ndarray | None = None
         self._colour_before_drag: np.ndarray | None = None
+        self._last_valid_drag_colour: np.ndarray | None = None
         self._image_cache_key: tuple[SelectorModel, int, int] | None = None
         self._image_cache_buffer: np.ndarray | None = None
         self._image_cache: QtGui.QImage | None = None
@@ -92,6 +93,7 @@ class SelectorWidget(QtWidgets.QWidget):
         self._keyboard_commit_pending = False
         self._pressed = True
         self._colour_before_drag = None if self._selected_colour is None else self._selected_colour.copy()
+        self._last_valid_drag_colour = None
         self._preview_at(event.pos())
         event.accept()
 
@@ -112,17 +114,17 @@ class SelectorWidget(QtWidgets.QWidget):
             self._selected_colour = colour.copy()
             self.update()
             self.committed.emit(colour.copy())
+        elif self._last_valid_drag_colour is not None:
+            self._selected_colour = self._last_valid_drag_colour.copy()
+            self.update()
+            self.committed.emit(self._last_valid_drag_colour.copy())
         else:
             self._selected_colour = self._colour_before_drag
             self.update()
             self.previewed.emit(None if self._selected_colour is None else self._selected_colour.copy())
         self._colour_before_drag = None
+        self._last_valid_drag_colour = None
         event.accept()
-
-    def leaveEvent(self, event: QtCore.QEvent) -> None:
-        if self._pressed:
-            self.previewed.emit(None)
-        super().leaveEvent(event)
 
     def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:
         self._flush_keyboard_commit()
@@ -162,9 +164,23 @@ class SelectorWidget(QtWidgets.QWidget):
 
     def _preview_at(self, point: QtCore.QPoint) -> None:
         colour = self._colour_at(point)
-        self._selected_colour = None if colour is None else colour.copy()
+        if colour is not None:
+            self._selected_colour = colour.copy()
+            if self._pressed:
+                self._last_valid_drag_colour = self._selected_colour.copy()
+            self.update()
+            self.previewed.emit(colour.copy())
+            return
+
+        # Once a drag has visited a valid colour, invalid movement keeps the
+        # preview pinned there and emits nothing until the next valid point or
+        # release. Downstream listeners keep showing the last usable colour.
+        if self._pressed and self._last_valid_drag_colour is not None:
+            return
+
+        self._selected_colour = None
         self.update()
-        self.previewed.emit(None if colour is None else colour.copy())
+        self.previewed.emit(None)
 
     def _colour_at(self, point: QtCore.QPoint) -> np.ndarray | None:
         return self._model.color_at_position((point.x(), point.y()), _widget_size(self))

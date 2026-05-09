@@ -198,13 +198,11 @@ def test_right_button_ring_press_does_not_rotate_chosen_hue(qtbot):
     assert _hue_diff(new_h, chosen_hue) < 1e-9
 
 
-def test_cancelled_ring_drag_restores_chosen_hue(qtbot):
-    # SelectorWidget treats a release on an invalid position as a cancel —
-    # it restores _colour_before_drag and emits previewed(_colour_before_drag).
-    # When the pre-drag colour is *achromatic* the wrapper cannot recover the
-    # hue from that signal (chroma == 0), so the event filter itself must
-    # mirror SelectorWidget's accept/cancel lifecycle — otherwise a partial
-    # drag leaks the intermediate hue past the cancellation.
+def test_ring_drag_outside_uses_latest_valid_hue(qtbot):
+    # SelectorWidget commits the latest valid drag colour when the pointer is
+    # released outside the selectable region. When C == 0 the emitted OKLab
+    # colour is achromatic, so the wrapper must retain the latest valid hue
+    # captured from ring geometry instead of trying to recover it from OKLab.
     achromatic = color_math.oklch_to_oklab([0.5, 0.0, 0.0])
     widget = _build_widget(qtbot, initial_lightness=0.5, initial_chroma=0.0, selected=achromatic)
     ring = widget.findChild(SelectorWidget)
@@ -222,11 +220,18 @@ def test_cancelled_ring_drag_restores_chosen_hue(qtbot):
     _send_mouse(ring, QtCore.QEvent.MouseButtonPress, chosen_point)
     _send_mouse(ring, QtCore.QEvent.MouseButtonRelease, chosen_point)
 
-    # Step 2: start a fresh drag at the top of the ring (~90°), then bail out
-    # by releasing on an invalid corner — SelectorWidget cancels.
+    # Step 2: start a fresh drag at the top of the ring (~90°), move to a
+    # second valid hue, then release on an invalid corner. The later valid hue
+    # is the one that should survive.
+    latest_hue = math.radians(135.0)
     top = QtCore.QPoint(cx, 5)
+    latest_valid = QtCore.QPoint(
+        int(round(cx + radius * 0.95 * math.cos(latest_hue))),
+        int(round(cy - radius * 0.95 * math.sin(latest_hue))),
+    )
     invalid_corner = QtCore.QPoint(0, 0)
     _send_mouse(ring, QtCore.QEvent.MouseButtonPress, top)
+    _send_mouse(ring, QtCore.QEvent.MouseMove, latest_valid, buttons=QtCore.Qt.LeftButton)
     _send_mouse(ring, QtCore.QEvent.MouseMove, invalid_corner, buttons=QtCore.Qt.LeftButton)
     _send_mouse(ring, QtCore.QEvent.MouseButtonRelease, invalid_corner)
 
@@ -238,7 +243,7 @@ def test_cancelled_ring_drag_restores_chosen_hue(qtbot):
 
     assert len(commits) == 1
     _, _, new_h = color_math.oklab_to_oklch(commits[0])
-    assert _hue_diff(new_h, chosen_hue) < math.radians(2.0)
+    assert _hue_diff(new_h, latest_hue) < math.radians(2.0)
 
 
 def test_ring_drag_does_not_change_chroma_slider_value(qtbot):

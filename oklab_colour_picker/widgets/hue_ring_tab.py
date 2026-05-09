@@ -12,7 +12,7 @@ import math
 from typing import Sequence
 
 import numpy as np
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets, sip
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
@@ -52,10 +52,11 @@ class HueRingTabWidget(QtWidgets.QWidget):
         # to 0. Track it separately and only refresh from OKLab when the
         # incoming colour actually carries hue information.
         self._chosen_hue: float = 0.0
-        # Mirror SelectorWidget's left-button drag lifecycle so the hue
-        # capture filter only commits hue on accepted interactions.
+        # Mirror SelectorWidget's left-button drag lifecycle so achromatic
+        # ring drags can preserve the latest valid hue even when the pointer
+        # is released outside the selectable band.
         self._ring_drag_active: bool = False
-        self._chosen_hue_before_drag: float | None = None
+        self._last_valid_drag_hue: float | None = None
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.setMinimumSize(self._ring.minimumSize())
         self._sync_panel_from_model()
@@ -110,14 +111,11 @@ class HueRingTabWidget(QtWidgets.QWidget):
 
     def _begin_hue_drag(self) -> None:
         self._ring_drag_active = True
-        self._chosen_hue_before_drag = self._chosen_hue
+        self._last_valid_drag_hue = None
 
     def _end_hue_drag(self, release_pos: QtCore.QPoint) -> None:
-        self._ring_drag_active = False
-        # SelectorWidget cancels the drag (restores _colour_before_drag) when
-        # the release lands on an invalid position. Mirror that for the
-        # captured hue, otherwise an intermediate position from a partial
-        # drag would silently overwrite the user's prior choice.
+        # A valid release may arrive without a separate move event at that
+        # position, so capture it before the drag cache is cleared.
         width, height = self._ring.width(), self._ring.height()
         valid = (
             width > 1
@@ -126,9 +124,10 @@ class HueRingTabWidget(QtWidgets.QWidget):
                 (release_pos.x(), release_pos.y()), (width, height)
             ) is not None
         )
-        if not valid and self._chosen_hue_before_drag is not None:
-            self._chosen_hue = self._chosen_hue_before_drag
-        self._chosen_hue_before_drag = None
+        if valid:
+            self._capture_hue_from_ring_position(release_pos)
+        self._ring_drag_active = False
+        self._last_valid_drag_hue = None
 
     def _capture_hue_from_ring_position(self, pos: QtCore.QPoint) -> None:
         width, height = self._ring.width(), self._ring.height()
@@ -146,7 +145,10 @@ class HueRingTabWidget(QtWidgets.QWidget):
         dy = center_y - float(pos.y())
         if math.hypot(dx, dy) <= 1e-9:
             return
-        self._chosen_hue = math.atan2(dy, dx) % math.tau
+        hue = math.atan2(dy, dx) % math.tau
+        self._chosen_hue = hue
+        if self._ring_drag_active:
+            self._last_valid_drag_hue = hue
 
     def _on_ring_previewed(self, oklab: object) -> None:
         self._capture_hue_if_chromatic(oklab)
@@ -263,26 +265,34 @@ class _Swatch(QtWidgets.QWidget):
         self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-        painter.fillRect(self.rect(), self._color)
-        painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 160), 1))
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
-        if self._hue_text:
-            self._paint_hue_text(painter)
-        painter.end()
+        if sip.isdeleted(self):
+            return
 
-    def _paint_hue_text(self, painter: QtGui.QPainter) -> None:
+        rect = self.rect()
+        width = rect.width()
+        hue_text = self._hue_text
+        painter = QtGui.QPainter(self)
+        try:
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            painter.fillRect(rect, self._color)
+            painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 160), 1))
+            painter.drawRect(rect.adjusted(0, 0, -1, -1))
+            if hue_text:
+                self._paint_hue_text(painter, hue_text, width)
+        finally:
+            painter.end()
+
+    def _paint_hue_text(self, painter: QtGui.QPainter, text: str, width: int) -> None:
         # Stroked text overlays the swatch — a dark halo plus a light fill keep
         # the label legible regardless of the swatch colour.
         font = painter.font()
         font.setBold(True)
         path = QtGui.QPainterPath()
         metrics = QtGui.QFontMetricsF(font)
-        text_width = metrics.horizontalAdvance(self._hue_text)
-        x = (self.width() - text_width) / 2.0
+        text_width = metrics.horizontalAdvance(text)
+        x = (width - text_width) / 2.0
         y = metrics.ascent() + 4.0
-        path.addText(QtCore.QPointF(x, y), font, self._hue_text)
+        path.addText(QtCore.QPointF(x, y), font, text)
         painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 220), 3.0))
         painter.setBrush(QtCore.Qt.NoBrush)
         painter.drawPath(path)

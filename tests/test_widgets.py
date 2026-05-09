@@ -71,6 +71,124 @@ def test_invalid_release_does_not_commit(qtbot):
     np.testing.assert_allclose(previews[-1], previous)
 
 
+def test_drag_that_never_hits_valid_colour_restores_previous_selection(qtbot):
+    widget = SelectorWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(40, 80)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    previous = widget.model.color_at_position((20, 40), _size(widget))
+    assert previous is not None
+    widget.set_selected_colour(previous)
+
+    commits = []
+    previews = []
+    widget.committed.connect(commits.append)
+    widget.previewed.connect(previews.append)
+
+    invalid_corner = QtCore.QPoint(0, 0)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, invalid_corner, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, invalid_corner, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, invalid_corner, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    assert commits == []
+    assert previews[0] is None
+    assert previews[1] is None
+    np.testing.assert_allclose(previews[2], previous)
+    np.testing.assert_allclose(widget.selected_colour, previous)
+
+
+def test_hue_chroma_drag_outside_commits_latest_valid_colour(qtbot):
+    widget = SelectorWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(64, 64)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    previous = widget.model.color_at_position((32, 32), _size(widget))
+    assert previous is not None
+    widget.set_selected_colour(previous)
+
+    commits = []
+    previews = []
+    widget.committed.connect(commits.append)
+    widget.previewed.connect(previews.append)
+
+    first_valid = QtCore.QPoint(42, 32)
+    latest_valid = QtCore.QPoint(46, 32)
+    invalid_corner = QtCore.QPoint(0, 0)
+    expected = widget.model.color_at_position((latest_valid.x(), latest_valid.y()), _size(widget))
+    assert expected is not None
+
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, first_valid, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, latest_valid, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, invalid_corner, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, invalid_corner, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    # Invalid movement after a valid hit stays pinned without re-emitting a
+    # preview; release commits the latest valid drag colour.
+    assert len(previews) == 2
+    assert not any(preview is None for preview in previews)
+    assert len(commits) == 1
+    np.testing.assert_allclose(commits[0], expected)
+    np.testing.assert_allclose(widget.selected_colour, expected)
+
+
+def test_chroma_lightness_drag_outside_commits_latest_valid_colour(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(64, 32)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    previous = widget.model.color_at_position((8, 16), _size(widget))
+    assert previous is not None
+    widget.set_selected_colour(previous)
+
+    commits = []
+    previews = []
+    widget.committed.connect(commits.append)
+    widget.previewed.connect(previews.append)
+
+    first_valid = QtCore.QPoint(12, 16)
+    latest_valid = QtCore.QPoint(24, 16)
+    invalid_gamut = QtCore.QPoint(63, 16)
+    expected = widget.model.color_at_position((latest_valid.x(), latest_valid.y()), _size(widget))
+    assert expected is not None
+    assert widget.model.color_at_position((invalid_gamut.x(), invalid_gamut.y()), _size(widget)) is None
+
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, first_valid, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, latest_valid, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, invalid_gamut, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, invalid_gamut, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    # Invalid movement after a valid hit stays pinned without re-emitting a
+    # preview; release commits the latest valid drag colour.
+    assert len(previews) == 2
+    assert not any(preview is None for preview in previews)
+    assert len(commits) == 1
+    np.testing.assert_allclose(commits[0], expected)
+    np.testing.assert_allclose(widget.selected_colour, expected)
+
+
+def test_leave_during_drag_does_not_emit_invalid_preview(qtbot):
+    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget.resize(64, 32)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    previews = []
+    widget.previewed.connect(previews.append)
+
+    point = QtCore.QPoint(24, 16)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, point, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    leave = QtCore.QEvent(QtCore.QEvent.Leave)
+    QtWidgets.QApplication.sendEvent(widget, leave)
+
+    assert len(previews) == 1
+    assert previews[0] is not None
+
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, point, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+
 def test_programmatic_colour_update_blocks_widget_signals(qtbot):
     widget = SelectorWidget(HueLightnessModel(hue=0.0))
     widget.resize(64, 32)
