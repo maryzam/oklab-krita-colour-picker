@@ -11,7 +11,7 @@ from PyQt5 import QtWidgets
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import ChromaLightnessModel, HueLightnessModel, LightnessSliceModel
-from oklab_colour_picker.widgets import SelectorWidget
+from oklab_colour_picker.widgets import HueRingTabWidget, SelectorWidget
 
 
 ForegroundListener = Callable[[Sequence[float]], None]
@@ -110,7 +110,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
 
     def _build_selectors(self) -> None:
         for mode, model in _models_for_colour(self._selected_colour).items():
-            widget = SelectorWidget(model, self)
+            widget = _build_selector_widget(mode, model, self)
             widget.setObjectName(MODE_OBJECT_NAMES[mode])
             widget.set_selected_colour(self._selected_colour)
             widget.previewed.connect(self._preview_colour)
@@ -160,6 +160,16 @@ class VisibilityConnection:
         except (TypeError, RuntimeError):
             pass
         self._connected = False
+
+
+def _build_selector_widget(
+    mode: SelectorMode,
+    model: object,
+    parent: QtWidgets.QWidget,
+) -> SelectorWidget | HueRingTabWidget:
+    if mode == SelectorMode.CHROMA_LIGHTNESS:
+        return HueRingTabWidget(model, parent)
+    return SelectorWidget(model, parent)
 
 
 def _models_for_colour(oklab: Sequence[float]) -> dict[SelectorMode, object]:
