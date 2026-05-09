@@ -28,14 +28,42 @@ def test_lightness_slice_validates_lightness(lightness):
         LightnessSliceModel(lightness=lightness)
 
 
-def test_lightness_slice_uses_per_hue_gamut_boundary_at_edge():
+def test_lightness_slice_radius_maps_to_absolute_chroma():
     model = LightnessSliceModel(lightness=0.5)
+    # Halfway from centre to the rim along +x (hue=0). Radius is normalised
+    # against LIGHTNESS_CHART_CHROMA_MAX, not the per-hue gamut max.
+    actual = model.color_at_position((75.0, 50.0), (101.0, 101.0))
 
-    actual = model.color_at_position((100.0, 50.0), (101.0, 101.0))
+    expected_chroma = 0.5 * LIGHTNESS_CHART_CHROMA_MAX
+    if expected_chroma > color_math.max_chroma_for_lh(0.5, 0.0):
+        assert actual is None
+    else:
+        np.testing.assert_allclose(actual, [0.5, expected_chroma, 0.0], atol=1e-12)
 
-    expected_chroma = color_math.max_chroma_for_lh(0.5, 0.0)
-    np.testing.assert_allclose(actual, [0.5, expected_chroma, 0.0], atol=1e-12)
-    assert color_math.in_srgb_gamut(color_math.oklab_to_srgb(actual), epsilon=1e-8) is True
+
+def test_lightness_slice_renders_transparent_outside_per_hue_gamut():
+    # At hue=0 (red-ish) the L=0.5 cusp chroma sits well below
+    # LIGHTNESS_CHART_CHROMA_MAX, so the rim along +x is outside gamut.
+    model = LightnessSliceModel(lightness=0.5)
+    assert model.color_at_position((100.0, 50.0), (101.0, 101.0)) is None
+
+
+def test_lightness_slice_keeps_in_gamut_pixel_inside_per_hue_leaf():
+    model = LightnessSliceModel(lightness=0.5)
+    # Blue (hue=3pi/2). Sit inside the gamut leaf at chroma well below cusp.
+    chroma = 0.20
+    assert chroma < color_math.max_chroma_for_lh(0.5, 3.0 * math.pi / 2.0)
+
+    fraction = chroma / LIGHTNESS_CHART_CHROMA_MAX
+    # hue=3pi/2 -> atan2(dy,dx) with dy<0, dx=0; dy = center_y - y, so y > center_y.
+    y = 50.0 + fraction * 50.0
+    actual = model.color_at_position((50.0, y), (101.0, 101.0))
+
+    np.testing.assert_allclose(
+        actual,
+        color_math.oklch_to_oklab([0.5, chroma, 3.0 * math.pi / 2.0]),
+        atol=1e-12,
+    )
 
 
 @pytest.mark.parametrize("position", [(-1.0, 50.0), (50.0, -1.0), (101.0, 50.0), (50.0, 101.0), (0.0, 0.0)])
@@ -59,11 +87,14 @@ def test_lightness_slice_rejects_inverse_outside_gamut_boundary():
     assert model.position_for_color([0.5, max_chroma * 1.01, 0.0], (101.0, 101.0)) is None
 
 
-@pytest.mark.parametrize("position", [(65.0, 43.0), (20.0, 50.0), (50.0, 80.0)])
+@pytest.mark.parametrize("position", [(60.0, 45.0), (40.0, 50.0), (50.0, 60.0)])
 def test_lightness_slice_round_trips_position_and_color(position):
+    # Positions chosen to sit well inside the L=0.55 gamut leaf for any hue,
+    # so round-tripping doesn't depend on per-hue cusp variation.
     model = LightnessSliceModel(lightness=0.55)
 
     color = model.color_at_position(position, (101.0, 101.0))
+    assert color is not None
     actual = model.position_for_color(color, (101.0, 101.0))
 
     np.testing.assert_allclose(actual, position, atol=1e-9)

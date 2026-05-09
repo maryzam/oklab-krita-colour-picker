@@ -45,7 +45,14 @@ Size = tuple[float, float]
 
 @dataclass(frozen=True)
 class LightnessSliceModel:
-    """Circular hue/chroma selector at a fixed OKLab lightness."""
+    """Circular hue/chroma selector at a fixed OKLab lightness.
+
+    Radius maps linearly to absolute OKLCh chroma in
+    ``[0, LIGHTNESS_CHART_CHROMA_MAX]``, matching the Lightness tab's x-axis
+    extent. Pixels whose chroma exceeds the per-hue sRGB cusp at this
+    lightness fall outside the gamut leaf and render transparent, so the
+    irregular gamut outline is visible directly on the disk.
+    """
 
     lightness: float
 
@@ -58,8 +65,10 @@ class LightnessSliceModel:
             return None
 
         normalized_radius, hue, _, _ = geometry
+        chroma = normalized_radius * LIGHTNESS_CHART_CHROMA_MAX
         max_chroma = color_math.max_chroma_for_lh(self.lightness, hue)
-        chroma = normalized_radius * max_chroma
+        if chroma > max_chroma + CHROMA_EPSILON:
+            return None
         return color_math.oklch_to_oklab([self.lightness, chroma, hue])
 
     def colors_at_positions(
@@ -72,12 +81,14 @@ class LightnessSliceModel:
         if geometry is None:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
 
-        normalized_radius, hue, valid = geometry
+        normalized_radius, hue, circle_valid = geometry
+        chroma = normalized_radius * LIGHTNESS_CHART_CHROMA_MAX
         max_chroma = color_math.max_chroma_for_lh(self.lightness, hue)
+        valid = circle_valid & (chroma <= max_chroma + CHROMA_EPSILON)
         oklch = np.stack(
             (
                 np.full_like(normalized_radius, self.lightness, dtype=float),
-                normalized_radius * max_chroma,
+                chroma,
                 hue,
             ),
             axis=-1,
@@ -90,14 +101,13 @@ class LightnessSliceModel:
             return None
 
         max_chroma = color_math.max_chroma_for_lh(lightness, hue)
-        if max_chroma <= CHROMA_EPSILON:
-            normalized_radius = 0.0 if chroma <= CHROMA_EPSILON else math.inf
-        else:
-            normalized_radius = chroma / max_chroma
-        if normalized_radius > 1.0 + POSITION_EPSILON:
+        if chroma > max_chroma + CHROMA_EPSILON:
+            return None
+        if chroma > LIGHTNESS_CHART_CHROMA_MAX + CHROMA_EPSILON:
             return None
 
-        return _position_from_circle(float(np.clip(normalized_radius, 0.0, 1.0)), hue, size)
+        normalized_radius = float(np.clip(chroma / LIGHTNESS_CHART_CHROMA_MAX, 0.0, 1.0))
+        return _position_from_circle(normalized_radius, hue, size)
 
 
 @dataclass(frozen=True)
