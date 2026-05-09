@@ -200,6 +200,56 @@ def test_hover_outside_drag_does_not_snap(qtbot):
     assert widget._colour_at(QtCore.QPoint(99, 50)) is None
 
 
+def test_click_without_drag_on_out_of_gamut_does_not_snap(qtbot):
+    # A plain click (press + release with no intervening move) on a
+    # transparent pixel inside the disk circle must NOT commit a snapped
+    # cusp colour — otherwise tapping anywhere on the disk would land a
+    # boundary pick. Snap is reserved for actual drags.
+    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(101, 101)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    commits = []
+    previews = []
+    widget.committed.connect(commits.append)
+    widget.previewed.connect(previews.append)
+
+    out_of_gamut = QtCore.QPoint(99, 50)  # inside the disk, past the leaf
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, out_of_gamut, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, out_of_gamut, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    # No commit happened because there was no valid pick along the (zero
+    # length) interaction.
+    assert commits == []
+    # The base widget signalled cancellation with a previewed(None) on
+    # release, mirroring the strict pre-snap behaviour.
+    assert previews and previews[-1] is None
+
+
+def test_drag_resumes_snapping_after_cursor_re_enters(qtbot):
+    # Qt keeps delivering mouse events to the pressed widget via the
+    # implicit mouse grab even after the cursor leaves. A leave should
+    # NOT close the snap window for the rest of the same drag —
+    # subsequent moves with the left button still held need to keep
+    # snapping at the cursor's hue.
+    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(101, 101)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    start = QtCore.QPoint(55, 50)
+    rim = QtCore.QPoint(99, 50)
+
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, rim, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    # Simulate the cursor leaving the widget mid-drag.
+    QtCore.QCoreApplication.sendEvent(widget, QtCore.QEvent(QtCore.QEvent.Leave))
+    # Subsequent move while the button is still held should keep snap
+    # active — _drag_in_progress must still be set.
+    assert widget._drag_in_progress is True
+
+
 def _send_mouse(widget, event_type, pos, button, buttons):
     event = QtGui.QMouseEvent(event_type, pos, button, buttons, QtCore.Qt.NoModifier)
     QtCore.QCoreApplication.sendEvent(widget, event)

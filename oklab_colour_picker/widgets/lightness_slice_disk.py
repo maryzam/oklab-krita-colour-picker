@@ -45,16 +45,20 @@ class LightnessSliceDiskWidget(SelectorWidget):
         super().__init__(model, parent)
         self._gamut_path_cache_key: tuple[float, int, int] | None = None
         self._gamut_path_cache: QtGui.QPainterPath | None = None
-        # SelectorWidget clears ``_pressed`` *before* the release-time
-        # ``_colour_at`` lookup, so we can't rely on it to scope snapping to
-        # the whole drag lifecycle (press → move → release). Track an
-        # explicit flag that stays set until the release handler returns.
+        # Snap is *drag-only*: a plain click on an out-of-gamut pixel must
+        # still cancel via the base widget's strict in-gamut path,
+        # otherwise tapping anywhere inside the disk would commit the cusp
+        # at that hue. The flag flips on the first ``mouseMoveEvent`` that
+        # arrives while a left-button press is active — proving the user is
+        # actually dragging — and stays set through the release handler
+        # (where SelectorWidget has already cleared its own ``_pressed``
+        # flag before the release-time ``_colour_at`` lookup).
         self._drag_in_progress = False
 
-    def mousePressEvent(self, event):  # type: ignore[override]
-        if event.button() == QtCore.Qt.LeftButton:
+    def mouseMoveEvent(self, event):  # type: ignore[override]
+        if event.buttons() & QtCore.Qt.LeftButton:
             self._drag_in_progress = True
-        super().mousePressEvent(event)
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):  # type: ignore[override]
         try:
@@ -62,13 +66,6 @@ class LightnessSliceDiskWidget(SelectorWidget):
         finally:
             if event.button() == QtCore.Qt.LeftButton:
                 self._drag_in_progress = False
-
-    def leaveEvent(self, event):  # type: ignore[override]
-        # If the cursor leaves the widget mid-drag, end the snap window so a
-        # later release outside the widget can't keep snapping at a stale
-        # cursor position. The parent's last-valid-colour pin still applies.
-        super().leaveEvent(event)
-        self._drag_in_progress = False
 
     def set_model(self, model) -> None:  # type: ignore[override]
         super().set_model(model)
