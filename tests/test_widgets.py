@@ -146,7 +146,9 @@ def test_keyboard_step_at_boundary_keeps_event_handled(qtbot):
     qtbot.addWidget(widget)
     widget.show()
 
-    start = widget.model.color_at_position((38, 40), _size(widget))
+    # Near the bottom of the disk (blue hue), where the L=0.5 gamut leaf
+    # extends out far enough that this radius is in-gamut.
+    start = widget.model.color_at_position((20, 55), _size(widget))
     assert start is not None
     widget.set_selected_colour(start)
 
