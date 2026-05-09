@@ -8,6 +8,7 @@ pytest.importorskip("PyQt5")
 
 from PyQt5 import QtCore, QtGui
 
+from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
     LIGHTNESS_CHART_CHROMA_MAX,
     LightnessSliceModel,
@@ -149,6 +150,54 @@ def test_gamut_path_caps_at_disk_radius(qtbot):
     assert bounds.right() <= cx + radius + 1
     assert bounds.top() >= cy - radius - 1
     assert bounds.bottom() <= cy + radius + 1
+
+
+def test_drag_past_gamut_leaf_snaps_to_cusp_at_cursor_hue(qtbot):
+    # At L=0.5 the +x rim of the disk sits past the per-hue gamut leaf. The
+    # base SelectorWidget already pins the preview to the last in-gamut
+    # colour visited during the drag (rewrite/ux-keep-last-valid-selection),
+    # but that pin tracks the colour from a few pixels in, not the cursor's
+    # current hue. With snap, the drag commits the in-gamut *cusp* chroma at
+    # the cursor's hue — even when the cursor is well past the leaf.
+    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(101, 101)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    # Start the drag at a position whose hue differs from the release hue, so
+    # "last in-gamut colour" and "snap at release-hue cusp" produce different
+    # answers and the test actually checks the snap path.
+    start = QtCore.QPoint(55, 60)  # hue ≈ atan2(10, 5) — well above +x axis
+    rim = QtCore.QPoint(99, 50)    # past the leaf along hue=0 (+x)
+
+    commits = []
+    widget.committed.connect(commits.append)
+
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, rim, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, rim, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    assert len(commits) == 1
+    lightness, chroma, hue = (float(v) for v in color_math.oklab_to_oklch(commits[0]))
+    np.testing.assert_allclose(lightness, 0.5, atol=1e-9)
+    # Snap takes the cursor's hue at release, not the press hue.
+    np.testing.assert_allclose(hue % math.tau, 0.0, atol=1e-6)
+    # And the chroma equals the per-hue cusp, which is strictly less than
+    # LIGHTNESS_CHART_CHROMA_MAX (the rim).
+    expected_chroma = float(color_math.max_chroma_for_lh(0.5, 0.0))
+    np.testing.assert_allclose(chroma, expected_chroma, atol=1e-9)
+
+
+def test_hover_outside_drag_does_not_snap(qtbot):
+    # Snapping is drag-only — _colour_at outside a drag still returns None
+    # past the leaf, so keyboard nav and other non-drag callers see strict
+    # in-gamut behaviour.
+    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(101, 101)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    assert widget._colour_at(QtCore.QPoint(99, 50)) is None
 
 
 def _send_mouse(widget, event_type, pos, button, buttons):

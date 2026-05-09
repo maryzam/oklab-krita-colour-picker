@@ -87,6 +87,35 @@ def test_lightness_slice_rejects_inverse_outside_gamut_boundary():
     assert model.position_for_color([0.5, max_chroma * 1.01, 0.0], (101.0, 101.0)) is None
 
 
+def test_lightness_slice_snap_clamps_to_per_hue_gamut():
+    # At hue=0 (red-ish) and L=0.5 the cusp chroma sits well below
+    # LIGHTNESS_CHART_CHROMA_MAX, so the rim along +x is past the leaf.
+    model = LightnessSliceModel(lightness=0.5)
+    snapped = model.snapped_color_at_position((100.0, 50.0), (101.0, 101.0))
+
+    assert snapped is not None
+    lightness, chroma, hue = color_math.oklab_to_oklch(snapped)
+    np.testing.assert_allclose(lightness, 0.5, atol=1e-12)
+    np.testing.assert_allclose(hue % math.tau, 0.0, atol=1e-9)
+    np.testing.assert_allclose(chroma, color_math.max_chroma_for_lh(0.5, 0.0), atol=1e-9)
+
+
+def test_lightness_slice_snap_returns_in_gamut_position_unchanged():
+    model = LightnessSliceModel(lightness=0.55)
+    position = (60.0, 45.0)
+    expected = model.color_at_position(position, (101.0, 101.0))
+    assert expected is not None
+
+    snapped = model.snapped_color_at_position(position, (101.0, 101.0))
+    np.testing.assert_allclose(snapped, expected, atol=1e-12)
+
+
+@pytest.mark.parametrize("position", [(-1.0, 50.0), (50.0, 101.0), (0.0, 0.0)])
+def test_lightness_slice_snap_returns_none_outside_disk(position):
+    model = LightnessSliceModel(lightness=0.5)
+    assert model.snapped_color_at_position(position, (101.0, 101.0)) is None
+
+
 @pytest.mark.parametrize("position", [(60.0, 45.0), (40.0, 50.0), (50.0, 60.0)])
 def test_lightness_slice_round_trips_position_and_color(position):
     # Positions chosen to sit well inside the L=0.55 gamut leaf for any hue,
