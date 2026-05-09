@@ -109,6 +109,28 @@ class LightnessSliceModel:
         normalized_radius = float(np.clip(chroma / LIGHTNESS_CHART_CHROMA_MAX, 0.0, 1.0))
         return _position_from_circle(normalized_radius, hue, size)
 
+    def snapped_color_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> np.ndarray | None:
+        """In-gamut colour at the cursor's hue, with chroma clamped to the leaf.
+
+        Used during drag to keep the preview continuous when the cursor leaves
+        the gamut leaf. ``color_at_position`` returns ``None`` past the leaf;
+        this variant instead clamps to the per-(L, hue) sRGB cusp at the same
+        hue so the preview slides along the boundary. Returns ``None`` only
+        when the cursor falls outside the disk circle entirely, so there is no
+        meaningful hue to snap to.
+        """
+        geometry = _circle_geometry(position, size)
+        if geometry is None:
+            return None
+
+        normalized_radius, hue, _, _ = geometry
+        desired_chroma = normalized_radius * LIGHTNESS_CHART_CHROMA_MAX
+        max_chroma = float(color_math.max_chroma_for_lh(self.lightness, hue))
+        chroma = max(0.0, min(desired_chroma, max_chroma))
+        return color_math.oklch_to_oklab([self.lightness, chroma, hue])
+
 
 @dataclass(frozen=True)
 class HueLightnessModel:
