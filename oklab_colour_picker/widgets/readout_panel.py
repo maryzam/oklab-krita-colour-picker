@@ -81,8 +81,9 @@ class _GradientSlider(QtWidgets.QSlider):
     Replaces Qt's default groove+handle painting because the track is already a
     cached RGBA image and the handle is a contrast-aware hollow rectangle that
     must reveal the underlying gradient (including the 4 px checkerboard for
-    out-of-gamut regions). Subclass route over QProxyStyle since we already own
-    the gradient rendering pipeline.
+    out-of-gamut regions). We subclass ``QSlider`` and override ``paintEvent``
+    instead of routing through ``QProxyStyle`` because the renderer pipeline
+    already gives us a cached RGBA track.
     """
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -271,12 +272,13 @@ class _UnifiedSwatch(QtWidgets.QWidget):
 
     The widget paints the fill itself; child widgets (hex line edit, revert
     button, OOG label) are positioned absolutely in :meth:`resizeEvent` so the
-    text/handles can sit *on top* of the colour fill without an intermediate
+    overlay controls can sit *on top* of the colour fill without an intermediate
     layout.
     """
 
     hex_committed = QtCore.pyqtSignal(str)
     revert_clicked = QtCore.pyqtSignal()
+    _INK_STYLES: dict[str, tuple[str, str, str]] = {}
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -312,7 +314,9 @@ class _UnifiedSwatch(QtWidgets.QWidget):
         self._hex_edit.installEventFilter(self)
         self._hex_edit.editingFinished.connect(self._on_hex_finished)
         self._editing = False
+        self._edit_start_hex = self._hex_text
         self._suppress_finish = False
+        self._ink_name: str | None = None
 
         self._revert_button = QtWidgets.QToolButton(self)
         self._revert_button.setText("↶")
@@ -373,16 +377,29 @@ class _UnifiedSwatch(QtWidgets.QWidget):
         r, g, b = self._colour.red(), self._colour.green(), self._colour.blue()
         ink = _ink_for(r, g, b)
         ink_name = ink.name()
-        self._hex_edit.setStyleSheet(
-            f"QLineEdit {{ background: transparent; border: none; color: {ink_name}; }}"
-        )
+        if ink_name == self._ink_name:
+            return
+        self._ink_name = ink_name
+        hex_style, oog_style, revert_style = self._styles_for_ink(ink_name)
+        self._hex_edit.setStyleSheet(hex_style)
         # Match the OOG icon and the revert glyph to the ink colour.
-        self._oog_label.setStyleSheet(f"color: {ink_name}; background: transparent;")
-        self._revert_button.setStyleSheet(
+        self._oog_label.setStyleSheet(oog_style)
+        self._revert_button.setStyleSheet(revert_style)
+
+    @classmethod
+    def _styles_for_ink(cls, ink_name: str) -> tuple[str, str, str]:
+        styles = cls._INK_STYLES.get(ink_name)
+        if styles is not None:
+            return styles
+        styles = (
+            f"QLineEdit {{ background: transparent; border: none; color: {ink_name}; }}",
+            f"color: {ink_name}; background: transparent;",
             f"QToolButton {{ color: {ink_name}; background: transparent; border: none; }}"
             f"QToolButton:hover {{ background: rgba(127,127,127,80); border-radius: 3px; }}"
-            f"QToolButton:disabled {{ color: rgba(127,127,127,160); }}"
+            f"QToolButton:disabled {{ color: rgba(127,127,127,160); }}",
         )
+        cls._INK_STYLES[ink_name] = styles
+        return styles
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
         painter = QtGui.QPainter(self)
@@ -424,6 +441,7 @@ class _UnifiedSwatch(QtWidgets.QWidget):
         if self._editing:
             return
         self._editing = True
+        self._edit_start_hex = self._hex_text
         self._hex_edit.setReadOnly(False)
         self._hex_edit.setFocus(QtCore.Qt.MouseFocusReason)
         self._hex_edit.selectAll()
@@ -444,6 +462,8 @@ class _UnifiedSwatch(QtWidgets.QWidget):
         text = self._hex_edit.text()
         self._editing = False
         self._hex_edit.setReadOnly(True)
+        if text.strip().lower() == self._edit_start_hex.lower():
+            return
         self.hex_committed.emit(text)
 
     def eventFilter(self, obj, event):  # type: ignore[override]

@@ -133,8 +133,8 @@ class LightnessSliceModel:
 
 
 @dataclass(frozen=True)
-class HueLightnessModel:
-    """Chroma/lightness selector at a fixed OKLab hue.
+class LightnessChromaSliceModel:
+    """Lightness/chroma selector at a fixed OKLab hue.
 
     The x axis spans absolute OKLCh chroma in ``[0, LIGHTNESS_CHART_CHROMA_MAX]``,
     so the selectable region traces the per-hue sRGB gamut leaf rather than
@@ -223,7 +223,9 @@ class HueLightnessSliceModel:
 
     The x axis sweeps hue over one full turn and the y axis sweeps OKLab
     lightness. Pixels whose fixed chroma exceeds the per-(L, hue) sRGB gamut
-    leaf are not selectable.
+    leaf are not selectable. In normal dock use this model is rebuilt from the
+    selected colour's chroma, so ``position_for_color`` is expected to receive
+    colours on this fixed-chroma slice.
     """
 
     chroma: float
@@ -351,6 +353,10 @@ class ChromaLightnessModel:
         if self.chroma > color_math.max_chroma_for_lh(self.lightness, hue) + CHROMA_EPSILON:
             return None
         return _position_from_circle(1.0, hue, size)
+
+
+# Compatibility alias for callers on the pre-Hue/Lightness-tab name.
+HueLightnessModel = LightnessChromaSliceModel
 
 
 def _circle_geometry(position: Sequence[float], size: Sequence[float]):

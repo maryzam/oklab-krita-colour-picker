@@ -11,6 +11,7 @@ pytest.importorskip("PyQt5")
 from oklab_colour_picker import color_math, renderers
 from oklab_colour_picker.widgets.readout_panel import (
     ReadoutPanel,
+    _UnifiedSwatch,
     hex_to_oklab,
     is_in_srgb_gamut,
     oklab_to_hex,
@@ -243,6 +244,53 @@ def test_readout_panel_hex_enter_sets_previous_only_once(qtbot):
 
     assert len(received) == 1
     np.testing.assert_allclose(panel._previous_oklab, a, atol=1e-12)
+
+
+def test_readout_panel_hex_focus_out_without_edit_does_not_commit(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+
+    a = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
+    b = color_math.srgb_to_oklab(np.array([0.7, 0.3, 0.1]))
+    panel.set_current_colour(a, committed=True)
+    panel.set_current_colour(b, committed=True)
+    previous = panel._previous_oklab.copy()
+
+    received: list[np.ndarray] = []
+    panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
+
+    panel._swatch._enter_edit_mode()
+    panel._swatch._hex_edit.editingFinished.emit()
+
+    assert received == []
+    np.testing.assert_allclose(panel._previous_oklab, previous, atol=1e-12)
+    np.testing.assert_allclose(panel._current_oklab, b, atol=1e-12)
+
+
+def test_unified_swatch_skips_stylesheet_reassignment_when_ink_is_unchanged(qtbot, monkeypatch):
+    swatch = _UnifiedSwatch()
+    qtbot.addWidget(swatch)
+    swatch.set_colour(color_math.srgb_to_oklab(np.array([0.9, 0.9, 0.9])))
+
+    calls: list[str] = []
+
+    def record_hex_style(style: str) -> None:
+        calls.append(style)
+
+    def record_oog_style(style: str) -> None:
+        calls.append(style)
+
+    def record_revert_style(style: str) -> None:
+        calls.append(style)
+
+    monkeypatch.setattr(swatch._hex_edit, "setStyleSheet", record_hex_style)
+    monkeypatch.setattr(swatch._oog_label, "setStyleSheet", record_oog_style)
+    monkeypatch.setattr(swatch._revert_button, "setStyleSheet", record_revert_style)
+
+    swatch.set_colour(color_math.srgb_to_oklab(np.array([0.8, 0.8, 0.8])))
+    swatch.set_oog_visible(True)
+
+    assert calls == []
 
 
 def test_readout_panel_out_of_gamut_warning_visibility(qtbot):

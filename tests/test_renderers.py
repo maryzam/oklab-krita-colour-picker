@@ -7,7 +7,7 @@ from oklab_colour_picker import color_math
 from oklab_colour_picker.renderers import render_rgba
 from oklab_colour_picker.selector_models import (
     ChromaLightnessModel,
-    HueLightnessModel,
+    LightnessChromaSliceModel,
     HueLightnessSliceModel,
     LightnessSliceModel,
 )
@@ -18,7 +18,7 @@ from oklab_colour_picker.selector_models import (
     [
         LightnessSliceModel(lightness=0.55),
         HueLightnessSliceModel(chroma=0.05),
-        HueLightnessModel(hue=1.25),
+        LightnessChromaSliceModel(hue=1.25),
         ChromaLightnessModel(lightness=0.55, chroma=0.05),
     ],
 )
@@ -59,7 +59,7 @@ def test_render_rgba_returns_mutable_copy_without_corrupting_cache():
             [(0, 10), (8, 10), (16, 0), (33, 10)],
         ),
         (
-            HueLightnessModel(hue=1.25),
+            LightnessChromaSliceModel(hue=1.25),
             (33, 21),
             [(0, 0), (16, 10), (32, 20), (33, 10)],
         ),
@@ -95,8 +95,8 @@ def test_lightness_renderer_preserves_coordinate_semantics_across_sizes(size):
     np.testing.assert_array_equal(rgba[y, x, :3], _quantize8(model.color_at_position((x, y), size)))
 
 
-def test_hue_lightness_renderer_alpha_marks_per_hue_gamut():
-    model = HueLightnessModel(hue=math.pi / 3.0)
+def test_lightness_chroma_slice_renderer_alpha_marks_per_hue_gamut():
+    model = LightnessChromaSliceModel(hue=math.pi / 3.0)
     rgba = render_rgba(model, (101, 101))
 
     # The left edge (chroma=0) is always in gamut; the right edge sits at the

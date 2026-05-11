@@ -9,12 +9,12 @@ pytest.importorskip("PyQt5")
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import color_math
-from oklab_colour_picker.selector_models import HueLightnessModel, LightnessSliceModel
+from oklab_colour_picker.selector_models import LightnessChromaSliceModel, LightnessSliceModel
 from oklab_colour_picker.widgets import SelectorWidget
 
 
 def test_mouse_drag_emits_previews_and_commit(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
     widget.show()
@@ -134,7 +134,7 @@ def test_hue_chroma_drag_outside_commits_latest_valid_colour(qtbot):
 
 
 def test_chroma_lightness_drag_outside_commits_latest_valid_colour(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
     widget.show()
@@ -170,7 +170,7 @@ def test_chroma_lightness_drag_outside_commits_latest_valid_colour(qtbot):
 
 
 def test_leave_during_drag_does_not_emit_invalid_preview(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
     widget.show()
@@ -190,7 +190,7 @@ def test_leave_during_drag_does_not_emit_invalid_preview(qtbot):
 
 
 def test_programmatic_colour_update_blocks_widget_signals(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
 
@@ -211,7 +211,7 @@ def test_programmatic_colour_update_blocks_widget_signals(qtbot):
 
 
 def test_keyboard_nudge_previews_then_commits_on_release(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
     widget.show()
@@ -240,7 +240,7 @@ def test_keyboard_nudge_previews_then_commits_on_release(qtbot):
 
 
 def test_signal_payload_mutation_does_not_corrupt_widget_state(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
     widget.show()
@@ -278,7 +278,7 @@ def test_keyboard_step_at_boundary_keeps_event_handled(qtbot):
 
 
 def test_mouse_interaction_cancels_pending_keyboard_commit(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
     widget.show()
@@ -306,7 +306,7 @@ def test_mouse_interaction_cancels_pending_keyboard_commit(qtbot):
 
 
 def test_focus_loss_flushes_pending_keyboard_commit(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)
     widget.show()
@@ -330,7 +330,7 @@ def test_focus_loss_flushes_pending_keyboard_commit(qtbot):
 
 
 def test_indicator_position_comes_from_model(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=math.pi / 3.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=math.pi / 3.0))
     widget.resize(100, 50)
     qtbot.addWidget(widget)
 
@@ -343,7 +343,7 @@ def test_indicator_position_comes_from_model(qtbot):
 
 
 def test_paint_event_renders_selector_image(qtbot):
-    widget = SelectorWidget(HueLightnessModel(hue=0.0))
+    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(32, 24)
     qtbot.addWidget(widget)
     widget.show()
