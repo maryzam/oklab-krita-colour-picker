@@ -218,6 +218,81 @@ class HueLightnessModel:
 
 
 @dataclass(frozen=True)
+class HueLightnessSliceModel:
+    """Hue/lightness selector at a fixed OKLCh chroma.
+
+    The x axis sweeps hue over one full turn and the y axis sweeps OKLab
+    lightness. Pixels whose fixed chroma exceeds the per-(L, hue) sRGB gamut
+    leaf are not selectable.
+    """
+
+    chroma: float
+
+    def __post_init__(self) -> None:
+        _validate_chroma(self.chroma)
+
+    def color_at_position(self, position: Sequence[float], size: Sequence[float]) -> np.ndarray | None:
+        bounds = _position_in_bounds(position, size)
+        if bounds is None:
+            return None
+
+        x, y, width, height = bounds
+        lightness = 1.0 - y / (height - 1.0)
+        hue = (x / (width - 1.0)) * math.tau
+        max_chroma = color_math.max_chroma_for_lh(lightness, hue)
+        if self.chroma > max_chroma + CHROMA_EPSILON:
+            return None
+        return color_math.oklch_to_oklab([lightness, self.chroma, hue])
+
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        bounds = _position_in_bounds_arrays(x, y, size)
+        if bounds is None:
+            return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
+
+        x, y, width, height, in_bounds = bounds
+        lightness = 1.0 - y / (height - 1.0)
+        hue = (x / (width - 1.0)) * math.tau
+        max_chroma = color_math.max_chroma_for_lh(lightness, hue)
+        valid = in_bounds & (self.chroma <= max_chroma + CHROMA_EPSILON)
+        oklch = np.stack(
+            (
+                lightness,
+                np.full_like(lightness, self.chroma, dtype=float),
+                hue,
+            ),
+            axis=-1,
+        )
+        return color_math.oklch_to_oklab(oklch), valid
+
+    def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
+        bounds = _size_bounds(size)
+        if bounds is None:
+            return None
+
+        width, height = bounds
+        lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
+        if not -LIGHTNESS_EPSILON <= lightness <= 1.0 + LIGHTNESS_EPSILON:
+            return None
+        if abs(chroma - self.chroma) > CHROMA_EPSILON:
+            return None
+
+        lightness = float(np.clip(lightness, 0.0, 1.0))
+        hue = float(hue % math.tau)
+        if self.chroma > color_math.max_chroma_for_lh(lightness, hue) + CHROMA_EPSILON:
+            return None
+
+        return (
+            float((hue / math.tau) * (width - 1.0)),
+            float((1.0 - lightness) * (height - 1.0)),
+        )
+
+
+@dataclass(frozen=True)
 class ChromaLightnessModel:
     """Circular hue selector at fixed OKLab lightness and chroma."""
 

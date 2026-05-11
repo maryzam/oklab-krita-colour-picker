@@ -8,6 +8,7 @@ from oklab_colour_picker.renderers import render_rgba
 from oklab_colour_picker.selector_models import (
     ChromaLightnessModel,
     HueLightnessModel,
+    HueLightnessSliceModel,
     LightnessSliceModel,
 )
 
@@ -16,6 +17,7 @@ from oklab_colour_picker.selector_models import (
     "model",
     [
         LightnessSliceModel(lightness=0.55),
+        HueLightnessSliceModel(chroma=0.05),
         HueLightnessModel(hue=1.25),
         ChromaLightnessModel(lightness=0.55, chroma=0.05),
     ],
@@ -50,6 +52,11 @@ def test_render_rgba_returns_mutable_copy_without_corrupting_cache():
             LightnessSliceModel(lightness=0.55),
             (33, 33),
             [(16, 16), (32, 16), (16, 0), (0, 0)],
+        ),
+        (
+            HueLightnessSliceModel(chroma=0.05),
+            (33, 21),
+            [(0, 10), (8, 10), (16, 0), (33, 10)],
         ),
         (
             HueLightnessModel(hue=1.25),
@@ -95,6 +102,14 @@ def test_hue_lightness_renderer_alpha_marks_per_hue_gamut():
     # The left edge (chroma=0) is always in gamut; the right edge sits at the
     # global max chroma which exceeds the per-hue cusp for almost every row.
     assert np.all(rgba[:, 0, 3] == 255)
+    assert np.count_nonzero(rgba[..., 3] == 0) > 0
+    assert np.count_nonzero(rgba[..., 3] == 255) > 0
+
+
+def test_hue_lightness_slice_renderer_alpha_marks_fixed_chroma_gamut():
+    model = HueLightnessSliceModel(chroma=0.15)
+    rgba = render_rgba(model, (101, 101))
+
     assert np.count_nonzero(rgba[..., 3] == 0) > 0
     assert np.count_nonzero(rgba[..., 3] == 255) > 0
 

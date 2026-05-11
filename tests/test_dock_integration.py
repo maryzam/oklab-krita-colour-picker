@@ -23,6 +23,7 @@ def test_dock_panel_constructs_all_selector_views_and_switches_modes(qtbot):
 
     assert [widget.objectName() for widget in panel.selector_widgets] == [
         "lightness-slice-selector",
+        "hue-lightness-slice-selector",
         "hue-lightness-selector",
         "chroma-lightness-selector",
     ]
