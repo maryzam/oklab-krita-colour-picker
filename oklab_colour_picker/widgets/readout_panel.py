@@ -280,7 +280,8 @@ class ReadoutPanel(QtWidgets.QWidget):
         hex_font.setStyleHint(QtGui.QFont.Monospace)
         hex_font.setFamily("monospace")
         self._hex_field.setFont(hex_font)
-        self._hex_field.returnPressed.connect(self._on_hex_committed)
+        # editingFinished covers Enter and focus-out; returnPressed would
+        # double-fire on Enter and clobber the revert target.
         self._hex_field.editingFinished.connect(self._on_hex_committed)
 
         self._gamut_warning = QtWidgets.QLabel("out of gamut", self)
@@ -323,12 +324,19 @@ class ReadoutPanel(QtWidgets.QWidget):
 
     # -- Public API ----------------------------------------------------
 
-    def set_current_colour(self, oklab: Sequence[float] | None) -> None:
-        """Update sliders, swatch, and hex without emitting signals."""
+    def set_current_colour(
+        self, oklab: Sequence[float] | None, *, committed: bool = True
+    ) -> None:
+        """Update sliders, swatch, and hex without emitting signals.
+
+        When ``committed`` is False the display updates but the previous
+        swatch is left alone — preview samples (mid-drag) must not clobber
+        the revert target.
+        """
         if oklab is None:
             return
         colour = np.asarray(oklab, dtype=float).copy()
-        if self._current_oklab is not None:
+        if committed and self._current_oklab is not None:
             self._previous_oklab = self._current_oklab.copy()
             self._previous_swatch.set_colour(self._previous_oklab)
         self._current_oklab = colour

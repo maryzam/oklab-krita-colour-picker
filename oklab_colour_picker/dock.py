@@ -112,7 +112,9 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         widget = self.selector_for_mode(mode)
         self._tabs.setCurrentWidget(widget)
 
-    def set_selected_colour(self, oklab: Sequence[float] | None) -> None:
+    def set_selected_colour(
+        self, oklab: Sequence[float] | None, *, committed: bool = True
+    ) -> None:
         if oklab is None:
             return
 
@@ -122,7 +124,9 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
             if widget.model != models[mode]:
                 widget.set_model(models[mode])
             widget.set_selected_colour(self._selected_colour)
-        self._readout_panel.set_current_colour(self._selected_colour)
+        self._readout_panel.set_current_colour(
+            self._selected_colour, committed=committed
+        )
 
     def _build_selectors(self) -> None:
         for mode, model in _models_for_colour(self._selected_colour).items():
@@ -143,12 +147,12 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
 
     def _preview_colour(self, oklab: Sequence[float] | None) -> None:
         if oklab is not None:
-            self.set_selected_colour(oklab)
+            self.set_selected_colour(oklab, committed=False)
         self._controller.set_preview_colour(oklab)
 
     def _commit_colour(self, oklab: Sequence[float] | None) -> None:
         if oklab is not None:
-            self.set_selected_colour(oklab)
+            self.set_selected_colour(oklab, committed=True)
         self._controller.request_foreground_commit(oklab)
 
     def _remove_foreground_listener(self) -> None:

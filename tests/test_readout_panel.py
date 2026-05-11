@@ -178,6 +178,57 @@ def test_readout_panel_set_previous_seeds_revert_target(qtbot):
     np.testing.assert_allclose(received[-1], seed, atol=1e-4)
 
 
+def test_readout_panel_preview_does_not_advance_previous(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+
+    first = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
+    panel.set_current_colour(first, committed=True)
+    snapshot = panel._previous_oklab.copy() if panel._previous_oklab is not None else None
+
+    preview = color_math.srgb_to_oklab(np.array([0.7, 0.3, 0.1]))
+    panel.set_current_colour(preview, committed=False)
+
+    if snapshot is None:
+        assert panel._previous_oklab is None
+    else:
+        np.testing.assert_allclose(panel._previous_oklab, snapshot, atol=1e-12)
+    np.testing.assert_allclose(panel._current_oklab, preview, atol=1e-12)
+
+
+def test_readout_panel_committed_updates_advance_previous(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+
+    a = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
+    b = color_math.srgb_to_oklab(np.array([0.7, 0.3, 0.1]))
+    panel.set_current_colour(a, committed=True)
+    panel.set_current_colour(b, committed=True)
+
+    np.testing.assert_allclose(panel._previous_oklab, a, atol=1e-12)
+    np.testing.assert_allclose(panel._current_oklab, b, atol=1e-12)
+
+
+def test_readout_panel_hex_enter_sets_previous_only_once(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+
+    a = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
+    panel.set_current_colour(a, committed=True)
+
+    received: list[np.ndarray] = []
+    panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
+
+    panel._hex_field.setText("#4a8fb2")
+    # Simulate Enter: both signals fire in the real Qt event flow, but only
+    # editingFinished is connected, so the handler runs exactly once.
+    panel._hex_field.returnPressed.emit()
+    panel._hex_field.editingFinished.emit()
+
+    assert len(received) == 1
+    np.testing.assert_allclose(panel._previous_oklab, a, atol=1e-12)
+
+
 def test_readout_panel_out_of_gamut_warning_visibility(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
