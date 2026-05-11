@@ -355,10 +355,6 @@ class ChromaLightnessModel:
         return _position_from_circle(1.0, hue, size)
 
 
-# Compatibility alias for callers on the pre-Hue/Lightness-tab name.
-HueLightnessModel = LightnessChromaSliceModel
-
-
 def _circle_geometry(position: Sequence[float], size: Sequence[float]):
     bounds = _position_in_bounds(position, size)
     if bounds is None:
