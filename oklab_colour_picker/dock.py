@@ -16,7 +16,13 @@ from oklab_colour_picker.selector_models import (
     LightnessChromaSliceModel,
     LightnessSliceModel,
 )
-from oklab_colour_picker.widgets import HueRingTabWidget, LightnessSliceDiskWidget, ReadoutPanel, SelectorWidget
+from oklab_colour_picker.widgets import (
+    HueLightnessSliceDiskWidget,
+    HueRingTabWidget,
+    LightnessSliceDiskWidget,
+    ReadoutPanel,
+    SelectorWidget,
+)
 
 
 ForegroundListener = Callable[[Sequence[float]], None]
@@ -198,6 +204,8 @@ def _build_selector_widget(
 ) -> SelectorWidget | HueRingTabWidget:
     if mode == SelectorMode.CHROMA_LIGHTNESS:
         return HueRingTabWidget(model, parent)
+    if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
+        return HueLightnessSliceDiskWidget(model, parent)
     if mode == SelectorMode.LIGHTNESS_SLICE:
         return LightnessSliceDiskWidget(model, parent)
     return SelectorWidget(model, parent)

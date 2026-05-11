@@ -13,6 +13,7 @@ import oklab_colour_picker
 from oklab_colour_picker import color_math
 from oklab_colour_picker.dock import ColourPickerDockPanel, SelectorMode, connect_dock_visibility
 from oklab_colour_picker.plugin import DOCK_FACTORY_ID, DOCK_TITLE, create_dock_widget_class, register_plugin
+from oklab_colour_picker.widgets import HueLightnessSliceDiskWidget
 import oklab_colour_picker.plugin as plugin_module
 
 
@@ -28,6 +29,11 @@ def test_dock_panel_constructs_all_selector_views_and_switches_modes(qtbot):
         "chroma-lightness-selector",
     ]
     assert panel.mode == SelectorMode.LIGHTNESS_SLICE
+
+    assert isinstance(
+        panel.selector_for_mode(SelectorMode.HUE_LIGHTNESS_SLICE),
+        HueLightnessSliceDiskWidget,
+    )
 
     panel.set_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
 

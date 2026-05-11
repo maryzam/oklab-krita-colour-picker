@@ -1,0 +1,55 @@
+"""Hue/Lightness disk widget with lightness-reference rings."""
+
+from __future__ import annotations
+
+from PyQt5 import QtCore, QtGui
+
+from oklab_colour_picker.selector_models import HueLightnessSliceModel
+from oklab_colour_picker.widgets.selector import SelectorWidget
+
+
+class HueLightnessSliceDiskWidget(SelectorWidget):
+    """Hue/Lightness disk that overlays lightness guide rings."""
+
+    _LIGHTNESS_RINGS: tuple[float, ...] = (0.25, 0.50, 0.75)
+
+    def __init__(self, model: HueLightnessSliceModel, parent=None) -> None:
+        super().__init__(model, parent)
+
+    def _paint_indicator(self, painter: QtGui.QPainter) -> None:
+        self._paint_lightness_rings(painter)
+        super()._paint_indicator(painter)
+
+    def _paint_lightness_rings(self, painter: QtGui.QPainter) -> None:
+        geometry = self._disk_geometry()
+        if geometry is None:
+            return
+        cx, cy, radius = geometry
+
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        painter.setBrush(QtCore.Qt.NoBrush)
+        pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 90), 1.0)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        for lightness in self._LIGHTNESS_RINGS:
+            ring_radius = radius * lightness
+            if ring_radius <= 0.5 or ring_radius > radius:
+                continue
+            painter.drawEllipse(QtCore.QPointF(cx, cy), ring_radius, ring_radius)
+
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(255, 255, 255, 160))
+        painter.drawEllipse(QtCore.QPointF(cx, cy), 1.5, 1.5)
+        painter.restore()
+
+    def _disk_geometry(self) -> tuple[float, float, float] | None:
+        width, height = self.width(), self.height()
+        if width <= 1 or height <= 1:
+            return None
+        radius = (min(width, height) - 1) / 2.0
+        if radius <= 0.0:
+            return None
+        cx = (width - 1) / 2.0
+        cy = (height - 1) / 2.0
+        return cx, cy, radius
