@@ -334,6 +334,15 @@ class ReadoutPanel(QtWidgets.QWidget):
         self._current_oklab = colour
         self._sync_widgets_to_colour(colour)
 
+    def set_previous_colour(self, oklab: Sequence[float] | None) -> None:
+        """Seed the previous-swatch directly (e.g. from initial Krita FG)."""
+        if oklab is None:
+            self._previous_oklab = None
+            self._previous_swatch.set_colour(None)
+            return
+        self._previous_oklab = np.asarray(oklab, dtype=float).copy()
+        self._previous_swatch.set_colour(self._previous_oklab)
+
     # -- Internal sync -------------------------------------------------
 
     def _sync_widgets_to_colour(self, oklab: np.ndarray) -> None:

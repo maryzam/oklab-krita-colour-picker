@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Callable, Protocol, Sequence
 
 import numpy as np
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtWidgets
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import ChromaLightnessModel, HueLightnessModel, LightnessSliceModel
@@ -65,24 +65,27 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
     def __init__(self, controller: DockController, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._controller = controller
+        # Pull current Krita foreground synchronously if the controller supports
+        # it, so the initial paint reflects the real FG rather than the default.
+        sync = getattr(controller, "sync_external_foreground", None)
+        if callable(sync):
+            try:
+                sync()
+            except Exception:
+                pass
         self._selected_colour = _selected_or_default(controller.selected_colour)
         self._tabs = QtWidgets.QTabWidget(self)
         self._selectors: dict[SelectorMode, SelectorWidget] = {}
-        self._chroma_readout = QtWidgets.QLabel(self)
-        self._chroma_readout.setObjectName("chroma-readout")
-        self._chroma_readout.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        readout_font = self._chroma_readout.font()
-        readout_font.setStyleHint(QtGui.QFont.Monospace)
-        readout_font.setFamily("monospace")
-        self._chroma_readout.setFont(readout_font)
         self._readout_panel = ReadoutPanel(self)
         self._readout_panel.previewed.connect(self._preview_colour)
         self._readout_panel.committed.connect(self._commit_colour)
         self._foreground_listener = self.set_selected_colour
         self._build_selectors()
         self._build_layout()
-        self._update_chroma_readout()
         self._readout_panel.set_current_colour(self._selected_colour)
+        # Seed previous swatch with the initial foreground so the first
+        # display has a meaningful revert target (current == previous).
+        self._readout_panel.set_previous_colour(self._selected_colour)
         self._controller.add_foreground_listener(self._foreground_listener)
         self.destroyed.connect(self._remove_foreground_listener)
 
@@ -119,7 +122,6 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
             if widget.model != models[mode]:
                 widget.set_model(models[mode])
             widget.set_selected_colour(self._selected_colour)
-        self._update_chroma_readout()
         self._readout_panel.set_current_colour(self._selected_colour)
 
     def _build_selectors(self) -> None:
@@ -137,15 +139,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
         layout.addWidget(self._tabs)
-        layout.addWidget(self._chroma_readout)
         layout.addWidget(self._readout_panel)
-
-    def _update_chroma_readout(self) -> None:
-        # All three tabs share LIGHTNESS_CHART_CHROMA_MAX, but the radial /
-        # x-axis scale is hard to read off by eye. Surface the absolute OKLCh
-        # chroma of the selected colour so users can compare across tabs.
-        _, chroma, _ = color_math.oklab_to_oklch(self._selected_colour)
-        self._chroma_readout.setText(f"C {float(chroma):.3f}")
 
     def _preview_colour(self, oklab: Sequence[float] | None) -> None:
         if oklab is not None:

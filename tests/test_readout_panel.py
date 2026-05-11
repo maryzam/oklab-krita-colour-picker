@@ -161,6 +161,23 @@ def test_readout_panel_previous_swatch_click_restores_previous(qtbot):
     np.testing.assert_allclose(received[-1], first, atol=1e-4)
 
 
+def test_readout_panel_set_previous_seeds_revert_target(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+
+    seed = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
+    panel.set_current_colour(seed)
+    panel.set_previous_colour(seed)
+
+    received: list[np.ndarray] = []
+    panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
+
+    panel._previous_swatch.clicked.emit()
+
+    assert received
+    np.testing.assert_allclose(received[-1], seed, atol=1e-4)
+
+
 def test_readout_panel_out_of_gamut_warning_visibility(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
