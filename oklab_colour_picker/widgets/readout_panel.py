@@ -1,4 +1,4 @@
-"""Expanded readout panel: swatches, L/C/H sliders, and hex field.
+"""Expanded readout panel: unified swatch and L/C/H gradient sliders.
 
 This widget is *additive* to the dock layout. It owns no colour state of its
 own — every interaction emits :attr:`previewed` / :attr:`committed` so the
@@ -25,6 +25,17 @@ HEX_RE = re.compile(r"^\s*#?([0-9a-fA-F]{6})\s*$")
 _STEP_L = 0.01
 _STEP_C = 0.005
 _STEP_H = 1.0
+
+# Contrast-aware paint colours (dark vs light) for handle borders and overlay
+# text drawn on top of arbitrary gradient pixels.
+_DARK_INK = QtGui.QColor("#1e1e1e")
+_LIGHT_INK = QtGui.QColor("#f2f2f2")
+
+_HANDLE_WIDTH = 10
+_HANDLE_BORDER = 2
+
+_SWATCH_HEIGHT = 48
+_CORNER_BUTTON_SIZE = 20
 
 
 def oklab_to_hex(oklab: Sequence[float]) -> str:
@@ -54,47 +65,25 @@ def is_in_srgb_gamut(oklab: Sequence[float], *, epsilon: float = 1e-4) -> bool:
     return bool(color_math.in_srgb_gamut(srgb, epsilon=epsilon))
 
 
-class _SwatchWidget(QtWidgets.QFrame):
-    """Solid colour swatch with a thin border (Krita-style)."""
+def _perceived_luminance(r: int, g: int, b: int) -> float:
+    """Simple Rec.709 luma on 0-255 sRGB bytes; good enough for ink choice."""
 
-    clicked = QtCore.pyqtSignal()
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.Box)
-        self.setLineWidth(1)
-        self.setFixedHeight(28)
-        self.setMinimumWidth(48)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        self._colour = QtGui.QColor(0, 0, 0)
-        self._enabled_click = False
 
-    def set_colour(self, oklab: Sequence[float] | None) -> None:
-        if oklab is None:
-            self._colour = QtGui.QColor(0, 0, 0, 0)
-        else:
-            r, g, b = (int(round(float(c) * 255.0)) for c in color_math.clip_srgb(color_math.oklab_to_srgb(np.asarray(oklab, dtype=float))))
-            self._colour = QtGui.QColor(r, g, b)
-        self.update()
-
-    def set_clickable(self, enabled: bool) -> None:
-        self._enabled_click = bool(enabled)
-        self.setCursor(QtCore.Qt.PointingHandCursor if enabled else QtCore.Qt.ArrowCursor)
-
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
-        painter = QtGui.QPainter(self)
-        painter.fillRect(self.rect().adjusted(1, 1, -1, -1), self._colour)
-        painter.end()
-        super().paintEvent(event)
-
-    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
-        if self._enabled_click and event.button() == QtCore.Qt.LeftButton and self.rect().contains(event.pos()):
-            self.clicked.emit()
-        super().mouseReleaseEvent(event)
+def _ink_for(r: int, g: int, b: int) -> QtGui.QColor:
+    return _DARK_INK if _perceived_luminance(r, g, b) > 0.55 else _LIGHT_INK
 
 
 class _GradientSlider(QtWidgets.QSlider):
-    """Horizontal slider whose groove is replaced by an OKLCh axis gradient."""
+    """Horizontal slider with a custom-painted gradient track and hollow handle.
+
+    Replaces Qt's default groove+handle painting because the track is already a
+    cached RGBA image and the handle is a contrast-aware hollow rectangle that
+    must reveal the underlying gradient (including the 4 px checkerboard for
+    out-of-gamut regions). Subclass route over QProxyStyle since we already own
+    the gradient rendering pipeline.
+    """
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(QtCore.Qt.Horizontal, parent)
@@ -102,7 +91,9 @@ class _GradientSlider(QtWidgets.QSlider):
         self.setMaximum(1000)
         self.setSingleStep(1)
         self.setPageStep(10)
-        self.setFixedHeight(20)
+        # Match the spinbox sizeHint so slider + spinbox align vertically.
+        probe = QtWidgets.QSpinBox()
+        self.setFixedHeight(max(20, probe.sizeHint().height()))
         self._track_image: QtGui.QImage | None = None
         self._track_buffer: np.ndarray | None = None
         self._track_cache_key: tuple | None = None
@@ -125,22 +116,52 @@ class _GradientSlider(QtWidgets.QSlider):
     def set_cache_key(self, key: tuple | None) -> None:
         self._track_cache_key = key
 
+    def _track_rect(self) -> QtCore.QRect:
+        # Reserve a little horizontal padding so the handle never paints past
+        # the slider edges; mapping below stays linear inside that band.
+        pad = _HANDLE_WIDTH // 2
+        return self.rect().adjusted(pad, 2, -pad, -2)
+
+    def _handle_x_center(self, track_rect: QtCore.QRect) -> int:
+        rng = max(1, self.maximum() - self.minimum())
+        fraction = (self.value() - self.minimum()) / rng
+        return track_rect.left() + int(round(fraction * (track_rect.width() - 1)))
+
+    def _border_ink(self, x_center: int, track_rect: QtCore.QRect) -> QtGui.QColor:
+        if self._track_buffer is None:
+            return _DARK_INK
+        buf = self._track_buffer
+        # Map handle x in widget coords to a column in the cached track buffer.
+        rel = (x_center - track_rect.left()) / max(1, track_rect.width() - 1)
+        col = int(round(np.clip(rel, 0.0, 1.0) * (buf.shape[1] - 1)))
+        row = buf.shape[0] // 2
+        r, g, b = int(buf[row, col, 0]), int(buf[row, col, 1]), int(buf[row, col, 2])
+        return _ink_for(r, g, b)
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
         painter = QtGui.QPainter(self)
-        track_rect = self.rect().adjusted(0, 4, 0, -4)
+        track_rect = self._track_rect()
         if self._track_image is not None:
             painter.drawImage(track_rect, self._track_image)
         painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 120), 1))
         painter.setBrush(QtCore.Qt.NoBrush)
         painter.drawRect(track_rect)
 
-        # Handle: a vertical bar with dark halo + light core, mirroring the
-        # disk indicator style so the picker reads as one widget family.
-        fraction = (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum())
-        x = track_rect.left() + int(round(fraction * (track_rect.width() - 1)))
-        handle_rect = QtCore.QRect(x - 2, self.rect().top(), 4, self.rect().height())
-        painter.fillRect(handle_rect, QtGui.QColor(0, 0, 0, 200))
-        painter.fillRect(handle_rect.adjusted(1, 1, -1, -1), QtGui.QColor(255, 255, 255, 230))
+        x = self._handle_x_center(track_rect)
+        handle_rect = QtCore.QRect(
+            x - _HANDLE_WIDTH // 2,
+            self.rect().top(),
+            _HANDLE_WIDTH,
+            self.rect().height() - 1,
+        )
+        ink = self._border_ink(x, track_rect)
+        pen = QtGui.QPen(ink, _HANDLE_BORDER)
+        pen.setJoinStyle(QtCore.Qt.MiterJoin)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.NoBrush)
+        # Inset by half the pen width so the stroke stays inside handle_rect.
+        inset = _HANDLE_BORDER / 2
+        painter.drawRect(QtCore.QRectF(handle_rect).adjusted(inset, inset, -inset, -inset))
         painter.end()
 
 
@@ -181,9 +202,10 @@ class _AxisRow(QtWidgets.QWidget):
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        layout.addWidget(label_widget)
-        layout.addWidget(self.slider, 1)
-        layout.addWidget(self.spin)
+        layout.setAlignment(QtCore.Qt.AlignVCenter)
+        layout.addWidget(label_widget, 0, QtCore.Qt.AlignVCenter)
+        layout.addWidget(self.slider, 1, QtCore.Qt.AlignVCenter)
+        layout.addWidget(self.spin, 0, QtCore.Qt.AlignVCenter)
 
         self.slider.valueChanged.connect(self._on_slider_changed)
         self.slider.sliderReleased.connect(self._on_slider_released)
@@ -243,12 +265,202 @@ class _AxisRow(QtWidgets.QWidget):
         self.valueChanged.emit(self.value(), True)
 
 
+class _UnifiedSwatch(QtWidgets.QWidget):
+    """Big colour swatch with overlaid hex text, corner revert button, and
+    out-of-gamut indicator.
+
+    The widget paints the fill itself; child widgets (hex line edit, revert
+    button, OOG label) are positioned absolutely in :meth:`resizeEvent` so the
+    text/handles can sit *on top* of the colour fill without an intermediate
+    layout.
+    """
+
+    hex_committed = QtCore.pyqtSignal(str)
+    revert_clicked = QtCore.pyqtSignal()
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(_SWATCH_HEIGHT)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.setMinimumWidth(48)
+        self._colour = QtGui.QColor(0, 0, 0)
+        self._hex_text = "#000000"
+        self._oog_visible = False
+
+        self._oog_label = QtWidgets.QLabel("⚠", self)
+        oog_font = self._oog_label.font()
+        oog_font.setBold(True)
+        oog_font.setPointSizeF(oog_font.pointSizeF() + 1.0)
+        self._oog_label.setFont(oog_font)
+        self._oog_label.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        self._oog_label.setToolTip("Out of sRGB gamut")
+        self._oog_label.setVisible(False)
+
+        self._hex_edit = QtWidgets.QLineEdit(self)
+        self._hex_edit.setMaxLength(7)
+        self._hex_edit.setAlignment(QtCore.Qt.AlignCenter)
+        hex_font = self._hex_edit.font()
+        hex_font.setStyleHint(QtGui.QFont.Monospace)
+        hex_font.setFamily("monospace")
+        hex_font.setPointSizeF(hex_font.pointSizeF() + 2.0)
+        hex_font.setBold(True)
+        self._hex_edit.setFont(hex_font)
+        self._hex_edit.setFrame(False)
+        self._hex_edit.setStyleSheet("QLineEdit { background: transparent; border: none; }")
+        self._hex_edit.setReadOnly(True)
+        self._hex_edit.setCursor(QtCore.Qt.IBeamCursor)
+        self._hex_edit.installEventFilter(self)
+        self._hex_edit.editingFinished.connect(self._on_hex_finished)
+        self._editing = False
+        self._suppress_finish = False
+
+        self._revert_button = QtWidgets.QToolButton(self)
+        self._revert_button.setText("↶")
+        self._revert_button.setFixedSize(_CORNER_BUTTON_SIZE, _CORNER_BUTTON_SIZE)
+        self._revert_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._revert_button.setAutoRaise(True)
+        self._revert_button.setEnabled(False)
+        self._revert_button.setToolTip("No previous colour")
+        self._revert_button.clicked.connect(self.revert_clicked.emit)
+
+    # -- Public state --------------------------------------------------
+
+    def set_colour(self, oklab: Sequence[float] | None) -> None:
+        if oklab is None:
+            self._colour = QtGui.QColor(0, 0, 0, 0)
+            self._hex_text = "#000000"
+        else:
+            arr = np.asarray(oklab, dtype=float)
+            r, g, b = (
+                int(round(float(c) * 255.0))
+                for c in color_math.clip_srgb(color_math.oklab_to_srgb(arr))
+            )
+            self._colour = QtGui.QColor(r, g, b)
+            self._hex_text = f"#{r:02x}{g:02x}{b:02x}"
+        if not self._editing and self._hex_edit.text().lower() != self._hex_text:
+            self._suppress_finish = True
+            try:
+                self._hex_edit.setText(self._hex_text)
+            finally:
+                self._suppress_finish = False
+        self._apply_ink_styles()
+        self.update()
+
+    def set_oog_visible(self, visible: bool) -> None:
+        self._oog_visible = bool(visible)
+        self._oog_label.setVisible(self._oog_visible)
+        self._apply_ink_styles()
+
+    def set_revert_target(self, hex_text: str | None) -> None:
+        if hex_text is None:
+            self._revert_button.setEnabled(False)
+            self._revert_button.setToolTip("No previous colour")
+            return
+        self._revert_button.setEnabled(True)
+        tip = (
+            f"Revert to <b>{hex_text}</b> "
+            f"<span style='background:{hex_text};'>&nbsp;&nbsp;&nbsp;&nbsp;</span>"
+        )
+        self._revert_button.setToolTip(tip)
+
+    @property
+    def hex_text(self) -> str:
+        return self._hex_text
+
+    # -- Painting / interactions --------------------------------------
+
+    def _apply_ink_styles(self) -> None:
+        r, g, b = self._colour.red(), self._colour.green(), self._colour.blue()
+        ink = _ink_for(r, g, b)
+        ink_name = ink.name()
+        self._hex_edit.setStyleSheet(
+            f"QLineEdit {{ background: transparent; border: none; color: {ink_name}; }}"
+        )
+        # Match the OOG icon and the revert glyph to the ink colour.
+        self._oog_label.setStyleSheet(f"color: {ink_name}; background: transparent;")
+        self._revert_button.setStyleSheet(
+            f"QToolButton {{ color: {ink_name}; background: transparent; border: none; }}"
+            f"QToolButton:hover {{ background: rgba(127,127,127,80); border-radius: 3px; }}"
+            f"QToolButton:disabled {{ color: rgba(127,127,127,160); }}"
+        )
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        painter = QtGui.QPainter(self)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        painter.fillRect(rect, self._colour)
+        painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 120), 1))
+        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.drawRect(rect)
+        painter.end()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        margin = 4
+        # OOG indicator top-left.
+        self._oog_label.adjustSize()
+        self._oog_label.move(margin, margin)
+        # Revert button top-right.
+        self._revert_button.move(
+            self.width() - _CORNER_BUTTON_SIZE - margin, margin
+        )
+        # Hex edit centred horizontally, vertically centred in the swatch,
+        # inset so it doesn't overlap the corner controls.
+        edit_height = self._hex_edit.sizeHint().height()
+        side_inset = _CORNER_BUTTON_SIZE + margin * 2
+        self._hex_edit.setGeometry(
+            side_inset,
+            (self.height() - edit_height) // 2,
+            max(40, self.width() - side_inset * 2),
+            edit_height,
+        )
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.LeftButton and self._hex_edit.geometry().contains(event.pos()):
+            self._enter_edit_mode()
+            return
+        super().mousePressEvent(event)
+
+    def _enter_edit_mode(self) -> None:
+        if self._editing:
+            return
+        self._editing = True
+        self._hex_edit.setReadOnly(False)
+        self._hex_edit.setFocus(QtCore.Qt.MouseFocusReason)
+        self._hex_edit.selectAll()
+
+    def _leave_edit_mode(self) -> None:
+        self._editing = False
+        self._hex_edit.setReadOnly(True)
+        # Reset to the canonical text in case the user typed garbage.
+        self._suppress_finish = True
+        try:
+            self._hex_edit.setText(self._hex_text)
+        finally:
+            self._suppress_finish = False
+
+    def _on_hex_finished(self) -> None:
+        if self._suppress_finish or not self._editing:
+            return
+        text = self._hex_edit.text()
+        self._editing = False
+        self._hex_edit.setReadOnly(True)
+        self.hex_committed.emit(text)
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        if obj is self._hex_edit and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == QtCore.Qt.Key_Escape:
+                self._leave_edit_mode()
+                self.setFocus(QtCore.Qt.OtherFocusReason)
+                return True
+        return super().eventFilter(obj, event)
+
+
 class ReadoutPanel(QtWidgets.QWidget):
-    """Swatches + L/C/H sliders + hex readout.
+    """Unified swatch + L/C/H gradient sliders.
 
     Emits :attr:`previewed` while a slider is being dragged or a spinbox/hex
     field is being edited; emits :attr:`committed` on slider release, spin
-    Enter/blur, hex Enter, and previous-swatch click.
+    Enter/blur, hex Enter, and revert-button click.
     """
 
     previewed = QtCore.pyqtSignal(object)
@@ -260,10 +472,9 @@ class ReadoutPanel(QtWidgets.QWidget):
         self._previous_oklab: np.ndarray | None = None
         self._syncing = False
 
-        self._previous_swatch = _SwatchWidget(self)
-        self._current_swatch = _SwatchWidget(self)
-        self._previous_swatch.set_clickable(True)
-        self._previous_swatch.clicked.connect(self._on_previous_clicked)
+        self._swatch = _UnifiedSwatch(self)
+        self._swatch.hex_committed.connect(self._on_hex_committed)
+        self._swatch.revert_clicked.connect(self._on_previous_clicked)
 
         self._row_l = _AxisRow("L", 0.0, 1.0, _STEP_L, 3, self)
         self._row_c = _AxisRow("C", 0.0, color_math.SRGB_MAX_CHROMA, _STEP_C, 3, self)
@@ -273,54 +484,22 @@ class ReadoutPanel(QtWidgets.QWidget):
         self._row_c.valueChanged.connect(self._on_c_changed)
         self._row_h.valueChanged.connect(self._on_h_changed)
 
-        self._hex_field = QtWidgets.QLineEdit(self)
-        self._hex_field.setMaxLength(7)
-        self._hex_field.setFixedWidth(96)
-        hex_font = self._hex_field.font()
-        hex_font.setStyleHint(QtGui.QFont.Monospace)
-        hex_font.setFamily("monospace")
-        self._hex_field.setFont(hex_font)
-        # editingFinished covers Enter and focus-out; returnPressed would
-        # double-fire on Enter and clobber the revert target.
-        self._hex_field.editingFinished.connect(self._on_hex_committed)
-
-        self._gamut_warning = QtWidgets.QLabel("out of gamut", self)
-        self._gamut_warning.setObjectName("oklab-gamut-warning")
-        warn_font = self._gamut_warning.font()
-        warn_font.setBold(True)
-        self._gamut_warning.setFont(warn_font)
-        self._gamut_warning.setStyleSheet("color: #c0392b;")
-        self._gamut_warning.setVisible(False)
-
         self._build_layout()
         # Initial slider tracks at a sensible default so the panel paints
         # something before the first colour arrives.
         self.set_current_colour(np.array([0.5, 0.0, 0.0], dtype=float))
         self._previous_oklab = None
-        self._previous_swatch.set_colour(None)
+        self._swatch.set_revert_target(None)
 
     def _build_layout(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        swatch_row = QtWidgets.QHBoxLayout()
-        swatch_row.setSpacing(0)
-        swatch_row.addWidget(self._previous_swatch, 1)
-        swatch_row.addWidget(self._current_swatch, 1)
-        layout.addLayout(swatch_row)
-
+        layout.addWidget(self._swatch)
         layout.addWidget(self._row_l)
         layout.addWidget(self._row_c)
         layout.addWidget(self._row_h)
-
-        hex_row = QtWidgets.QHBoxLayout()
-        hex_label = QtWidgets.QLabel("Hex", self)
-        hex_label.setFixedWidth(28)
-        hex_row.addWidget(hex_label)
-        hex_row.addWidget(self._hex_field)
-        hex_row.addWidget(self._gamut_warning, 1)
-        layout.addLayout(hex_row)
 
     # -- Public API ----------------------------------------------------
 
@@ -342,18 +521,18 @@ class ReadoutPanel(QtWidgets.QWidget):
             and not np.allclose(colour, self._current_oklab, atol=1e-6)
         ):
             self._previous_oklab = self._current_oklab.copy()
-            self._previous_swatch.set_colour(self._previous_oklab)
+            self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
         self._current_oklab = colour
         self._sync_widgets_to_colour(colour)
 
     def set_previous_colour(self, oklab: Sequence[float] | None) -> None:
-        """Seed the previous-swatch directly (e.g. from initial Krita FG)."""
+        """Seed the revert target directly (e.g. from initial Krita FG)."""
         if oklab is None:
             self._previous_oklab = None
-            self._previous_swatch.set_colour(None)
+            self._swatch.set_revert_target(None)
             return
         self._previous_oklab = np.asarray(oklab, dtype=float).copy()
-        self._previous_swatch.set_colour(self._previous_oklab)
+        self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
 
     # -- Internal sync -------------------------------------------------
 
@@ -364,11 +543,8 @@ class ReadoutPanel(QtWidgets.QWidget):
             self._row_l.set_value(float(l))
             self._row_c.set_value(float(c))
             self._row_h.set_value(math.degrees(float(h) % math.tau))
-            self._current_swatch.set_colour(oklab)
-            hex_text = oklab_to_hex(oklab)
-            if self._hex_field.text().lower() != hex_text:
-                self._hex_field.setText(hex_text)
-            self._gamut_warning.setVisible(not is_in_srgb_gamut(oklab))
+            self._swatch.set_colour(oklab)
+            self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
             self._refresh_tracks(float(l), float(c), float(h))
         finally:
             self._syncing = False
@@ -382,8 +558,8 @@ class ReadoutPanel(QtWidgets.QWidget):
             (renderers.AXIS_H, self._row_h, (lightness, chroma)),
         ):
             slider = row.slider
-            width = max(2, slider.width())
-            height = max(2, slider.height() - 8)
+            width = max(2, slider.width() - _HANDLE_WIDTH)
+            height = max(2, slider.height() - 4)
             key = (axis, round(fixed[0], 4), round(fixed[1], 4), width, height)
             if slider.cache_key() == key:
                 continue
@@ -411,22 +587,19 @@ class ReadoutPanel(QtWidgets.QWidget):
         if self._syncing:
             return
         oklab = color_math.oklch_to_oklab([lightness, chroma, hue_rad])
-        # Update internal state so the previous-swatch tracks the last colour
+        # Update internal state so the revert target tracks the last colour
         # the user actually committed (not every intermediate preview).
         if committed:
             if self._current_oklab is not None:
                 self._previous_oklab = self._current_oklab.copy()
-                self._previous_swatch.set_colour(self._previous_oklab)
+                self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
             self._current_oklab = oklab.copy()
-        # Reflect the new colour in the swatch + hex + gamut warning + the
+        # Reflect the new colour in the swatch + hex + gamut indicator + the
         # other two slider tracks immediately, without re-emitting.
         self._syncing = True
         try:
-            self._current_swatch.set_colour(oklab)
-            hex_text = oklab_to_hex(oklab)
-            if self._hex_field.text().lower() != hex_text:
-                self._hex_field.setText(hex_text)
-            self._gamut_warning.setVisible(not is_in_srgb_gamut(oklab))
+            self._swatch.set_colour(oklab)
+            self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
             self._refresh_tracks(lightness, chroma, hue_rad)
         finally:
             self._syncing = False
@@ -444,14 +617,14 @@ class ReadoutPanel(QtWidgets.QWidget):
         l, c, _ = self._current_lch()
         self._emit_from_lch(l, c, math.radians(value_degrees) % math.tau, committed)
 
-    def _on_hex_committed(self) -> None:
+    def _on_hex_committed(self, text: str) -> None:
         if self._syncing:
             return
-        oklab = hex_to_oklab(self._hex_field.text())
+        oklab = hex_to_oklab(text)
         if oklab is None:
-            # Restore the field to the current colour on malformed input.
+            # Restore the swatch to the current colour on malformed input.
             if self._current_oklab is not None:
-                self._hex_field.setText(oklab_to_hex(self._current_oklab))
+                self._swatch.set_colour(self._current_oklab)
             return
         l, c, h = color_math.oklab_to_oklch(oklab)
         self._emit_from_lch(float(l), float(c), float(h), True)

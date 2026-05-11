@@ -124,7 +124,7 @@ def test_readout_panel_hex_field_reflects_current_colour(qtbot):
     oklab = color_math.srgb_to_oklab(np.array([0x4A, 0x8F, 0xB2]) / 255.0)
     panel.set_current_colour(oklab)
 
-    assert panel._hex_field.text() == "#4a8fb2"
+    assert panel._swatch.hex_text == "#4a8fb2"
 
 
 def test_readout_panel_hex_edit_emits_committed_colour(qtbot):
@@ -135,15 +135,33 @@ def test_readout_panel_hex_edit_emits_committed_colour(qtbot):
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
 
-    panel._hex_field.setText("#4a8fb2")
-    panel._hex_field.editingFinished.emit()
+    panel._swatch.hex_committed.emit("#4a8fb2")
 
     assert received
     expected = color_math.srgb_to_oklab(np.array([0x4A, 0x8F, 0xB2]) / 255.0)
     np.testing.assert_allclose(received[-1], expected, atol=1e-4)
 
 
-def test_readout_panel_previous_swatch_click_restores_previous(qtbot):
+def test_readout_panel_hex_edit_mode_commits_via_lineedit(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+    panel.set_current_colour(color_math.srgb_to_oklab(np.array([0.5, 0.5, 0.5])))
+
+    received: list[np.ndarray] = []
+    panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
+
+    swatch = panel._swatch
+    swatch._enter_edit_mode()
+    assert not swatch._hex_edit.isReadOnly()
+    swatch._hex_edit.setText("#4a8fb2")
+    swatch._hex_edit.editingFinished.emit()
+
+    assert received
+    expected = color_math.srgb_to_oklab(np.array([0x4A, 0x8F, 0xB2]) / 255.0)
+    np.testing.assert_allclose(received[-1], expected, atol=1e-4)
+
+
+def test_readout_panel_revert_button_restores_previous(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
 
@@ -155,7 +173,8 @@ def test_readout_panel_previous_swatch_click_restores_previous(qtbot):
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
 
-    panel._previous_swatch.clicked.emit()
+    assert panel._swatch._revert_button.isEnabled()
+    panel._swatch._revert_button.click()
 
     assert received
     np.testing.assert_allclose(received[-1], first, atol=1e-4)
@@ -172,7 +191,8 @@ def test_readout_panel_set_previous_seeds_revert_target(qtbot):
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
 
-    panel._previous_swatch.clicked.emit()
+    assert panel._swatch._revert_button.isEnabled()
+    panel._swatch.revert_clicked.emit()
 
     assert received
     np.testing.assert_allclose(received[-1], seed, atol=1e-4)
@@ -219,11 +239,7 @@ def test_readout_panel_hex_enter_sets_previous_only_once(qtbot):
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
 
-    panel._hex_field.setText("#4a8fb2")
-    # Simulate Enter: both signals fire in the real Qt event flow, but only
-    # editingFinished is connected, so the handler runs exactly once.
-    panel._hex_field.returnPressed.emit()
-    panel._hex_field.editingFinished.emit()
+    panel._swatch.hex_committed.emit("#4a8fb2")
 
     assert len(received) == 1
     np.testing.assert_allclose(panel._previous_oklab, a, atol=1e-12)
@@ -234,9 +250,9 @@ def test_readout_panel_out_of_gamut_warning_visibility(qtbot):
     qtbot.addWidget(panel)
 
     panel.set_current_colour(color_math.srgb_to_oklab(np.array([0.5, 0.5, 0.5])))
-    assert not panel._gamut_warning.isVisible() or panel._gamut_warning.isHidden()
+    assert not panel._swatch._oog_visible
 
     panel.set_current_colour(
         color_math.oklch_to_oklab([0.6, color_math.SRGB_MAX_CHROMA, 0.0])
     )
-    assert panel._gamut_warning.isVisibleTo(panel)
+    assert panel._swatch._oog_visible
