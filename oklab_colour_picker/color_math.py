@@ -335,3 +335,20 @@ def _oklab_hue_to_lms_coefficients(a_, b_):
         _OKLAB_TO_LMS[1, 1] * a_ + _OKLAB_TO_LMS[1, 2] * b_,
         _OKLAB_TO_LMS[2, 1] * a_ + _OKLAB_TO_LMS[2, 2] * b_,
     )
+
+
+def _compute_srgb_max_chroma() -> float:
+    """Return the global maximum in-gamut OKLCh chroma across all (L, hue).
+
+    Sampled densely once at import time so axis-track widgets can use a
+    static chroma scale; the cusp surface is smooth enough that 256x720
+    sampling captures the global max within a fraction of a percent.
+    """
+
+    hues = np.linspace(0.0, math.tau, 720, endpoint=False)
+    lightness = np.linspace(0.0, 1.0, 256)
+    grid_l, grid_h = np.meshgrid(lightness, hues, indexing="ij")
+    return float(np.max(max_chroma_for_lh(grid_l, grid_h)))
+
+
+SRGB_MAX_CHROMA = _compute_srgb_max_chroma()

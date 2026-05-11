@@ -2,6 +2,7 @@
 
 from oklab_colour_picker.widgets.hue_ring_tab import HueRingTabWidget
 from oklab_colour_picker.widgets.lightness_slice_disk import LightnessSliceDiskWidget
+from oklab_colour_picker.widgets.readout_panel import ReadoutPanel
 from oklab_colour_picker.widgets.selector import SelectorWidget
 
-__all__ = ["HueRingTabWidget", "LightnessSliceDiskWidget", "SelectorWidget"]
+__all__ = ["HueRingTabWidget", "LightnessSliceDiskWidget", "ReadoutPanel", "SelectorWidget"]

@@ -56,3 +56,117 @@ def _validate_size(size: Sequence[int]) -> tuple[int, int]:
     if width <= 1 or height <= 1:
         raise ValueError("renderer size must be at least 2x2")
     return width, height
+
+
+# Axis identifiers for OKLCh slider tracks.
+AXIS_L = "L"
+AXIS_C = "C"
+AXIS_H = "H"
+
+# Checkerboard tile size (px) for the out-of-gamut indicator inside slider
+# tracks. Small enough to read as a pattern at slider heights of ~14 px.
+_GAMUT_GAP_TILE = 4
+_GAMUT_GAP_LIGHT = np.array([200, 200, 200, 255], dtype=np.uint8)
+_GAMUT_GAP_DARK = np.array([120, 120, 120, 255], dtype=np.uint8)
+
+
+def render_axis_track(
+    axis: str,
+    fixed: tuple[float, float],
+    chroma_max: float,
+    size: Sequence[int],
+) -> np.ndarray:
+    """Render an OKLCh axis gradient bar with out-of-gamut regions hatched.
+
+    ``axis`` is one of ``AXIS_L``, ``AXIS_C``, ``AXIS_H``. ``fixed`` carries
+    the other two OKLCh components in OKLCh order (omitting the swept axis):
+
+    - ``AXIS_L``: ``(chroma, hue)``
+    - ``AXIS_C``: ``(lightness, hue)``
+    - ``AXIS_H``: ``(lightness, chroma)``
+
+    ``chroma_max`` is the C-axis full-scale value (typically
+    ``color_math.SRGB_MAX_CHROMA``); ignored for L and H axes.
+
+    Returns a ``(height, width, 4)`` uint8 RGBA buffer.
+    """
+
+    width, height = _validate_size(size)
+    swept = _swept_values(axis, width, chroma_max)
+    oklch = _oklch_grid(axis, fixed, swept, height, width)
+    in_gamut, srgb8 = _classify_track_pixels(oklch)
+    return _compose_track_rgba(srgb8, in_gamut, width, height)
+
+
+def _swept_values(axis: str, width: int, chroma_max: float) -> np.ndarray:
+    fraction = np.linspace(0.0, 1.0, width)
+    if axis == AXIS_L:
+        return fraction
+    if axis == AXIS_C:
+        return fraction * float(chroma_max)
+    if axis == AXIS_H:
+        return fraction * (2.0 * np.pi)
+    raise ValueError(f"unknown axis: {axis!r}")
+
+
+def _oklch_grid(
+    axis: str,
+    fixed: tuple[float, float],
+    swept: np.ndarray,
+    height: int,
+    width: int,
+) -> np.ndarray:
+    # Build the per-column OKLCh triple, then broadcast to (height, width, 3).
+    if axis == AXIS_L:
+        chroma, hue = float(fixed[0]), float(fixed[1])
+        lightness = swept
+        oklch_row = np.stack(
+            (lightness, np.full_like(swept, chroma), np.full_like(swept, hue)),
+            axis=-1,
+        )
+    elif axis == AXIS_C:
+        lightness, hue = float(fixed[0]), float(fixed[1])
+        oklch_row = np.stack(
+            (np.full_like(swept, lightness), swept, np.full_like(swept, hue)),
+            axis=-1,
+        )
+    elif axis == AXIS_H:
+        lightness, chroma = float(fixed[0]), float(fixed[1])
+        oklch_row = np.stack(
+            (np.full_like(swept, lightness), np.full_like(swept, chroma), swept),
+            axis=-1,
+        )
+    else:
+        raise ValueError(f"unknown axis: {axis!r}")
+    return np.broadcast_to(oklch_row[None, :, :], (height, width, 3))
+
+
+def _classify_track_pixels(oklch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    oklab = color_math.oklch_to_oklab(oklch)
+    srgb = color_math.oklab_to_srgb(oklab)
+    in_gamut = color_math.in_srgb_gamut(srgb, epsilon=1e-6)
+    clipped = color_math.clip_srgb(srgb)
+    srgb8 = np.rint(clipped * 255.0).astype(np.uint8)
+    return in_gamut, srgb8
+
+
+def _compose_track_rgba(
+    srgb8: np.ndarray, in_gamut: np.ndarray, width: int, height: int
+) -> np.ndarray:
+    pattern = _checker_tile(width, height)
+    rgba = np.zeros((height, width, 4), dtype=np.uint8)
+    rgba[..., :3] = srgb8
+    rgba[..., 3] = 255
+    out_of_gamut = ~in_gamut
+    if np.any(out_of_gamut):
+        rgba[out_of_gamut] = np.where(
+            pattern[out_of_gamut][..., None],
+            _GAMUT_GAP_LIGHT,
+            _GAMUT_GAP_DARK,
+        )
+    return rgba
+
+
+def _checker_tile(width: int, height: int) -> np.ndarray:
+    y, x = np.indices((height, width))
+    return ((x // _GAMUT_GAP_TILE) + (y // _GAMUT_GAP_TILE)) % 2 == 0

@@ -106,39 +106,38 @@ def test_indicator_maps_to_same_colour_after_resize(qtbot):
     assert actual == pytest.approx(expected, abs=1.0)
 
 
-def test_chroma_readout_reflects_selected_colour(qtbot):
+def test_selector_preview_then_commit_preserves_previous_swatch(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
     qtbot.addWidget(panel)
 
-    colour = color_math.oklch_to_oklab([0.5, 0.142, math.pi / 3.0])
-    panel.set_selected_colour(colour)
+    colour_a = color_math.oklch_to_oklab([0.50, 0.05, math.pi / 6.0])
+    colour_b = color_math.oklch_to_oklab([0.60, 0.08, math.pi / 3.0])
+    panel.set_selected_colour(colour_a, committed=True)
+    panel._readout_panel.set_previous_colour(colour_a)
 
-    assert panel._chroma_readout.text() == "C 0.142"
+    selector = panel.active_selector
+    selector.previewed.emit(np.asarray(colour_b, dtype=float).copy())
+    selector.committed.emit(np.asarray(colour_b, dtype=float).copy())
+
+    np.testing.assert_allclose(panel._readout_panel._previous_oklab, colour_a, atol=1e-6)
+    np.testing.assert_allclose(panel._readout_panel._current_oklab, colour_b, atol=1e-6)
 
 
-def test_chroma_readout_updates_on_external_foreground_sync(qtbot):
+def test_readout_commit_signal_preserves_previous_swatch(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
     qtbot.addWidget(panel)
 
-    controller.emit_foreground(color_math.oklch_to_oklab([0.6, 0.077, 1.0]))
+    colour_a = color_math.oklch_to_oklab([0.50, 0.05, math.pi / 6.0])
+    colour_b = color_math.oklch_to_oklab([0.60, 0.08, math.pi / 3.0])
+    panel.set_selected_colour(colour_a, committed=True)
+    panel._readout_panel.set_previous_colour(colour_a)
 
-    assert panel._chroma_readout.text() == "C 0.077"
+    panel._readout_panel.committed.emit(np.asarray(colour_b, dtype=float).copy())
 
-
-def test_chroma_readout_persists_across_tab_changes(qtbot):
-    controller = FakeController()
-    panel = ColourPickerDockPanel(controller)
-    qtbot.addWidget(panel)
-    colour = color_math.oklch_to_oklab([0.7, 0.123, 0.5])
-    panel.set_selected_colour(colour)
-
-    text = panel._chroma_readout.text()
-    panel.set_mode(SelectorMode.HUE_LIGHTNESS)
-    assert panel._chroma_readout.text() == text
-    panel.set_mode(SelectorMode.CHROMA_LIGHTNESS)
-    assert panel._chroma_readout.text() == text
+    np.testing.assert_allclose(panel._readout_panel._previous_oklab, colour_a, atol=1e-6)
+    np.testing.assert_allclose(panel._readout_panel._current_oklab, colour_b, atol=1e-6)
 
 
 def test_qdock_visibility_signal_reaches_controller(qtbot):
