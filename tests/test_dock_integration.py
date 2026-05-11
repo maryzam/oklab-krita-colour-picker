@@ -106,6 +106,40 @@ def test_indicator_maps_to_same_colour_after_resize(qtbot):
     assert actual == pytest.approx(expected, abs=1.0)
 
 
+def test_selector_preview_then_commit_preserves_previous_swatch(qtbot):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+
+    colour_a = color_math.oklch_to_oklab([0.50, 0.05, math.pi / 6.0])
+    colour_b = color_math.oklch_to_oklab([0.60, 0.08, math.pi / 3.0])
+    panel.set_selected_colour(colour_a, committed=True)
+    panel._readout_panel.set_previous_colour(colour_a)
+
+    selector = panel.active_selector
+    selector.previewed.emit(np.asarray(colour_b, dtype=float).copy())
+    selector.committed.emit(np.asarray(colour_b, dtype=float).copy())
+
+    np.testing.assert_allclose(panel._readout_panel._previous_oklab, colour_a, atol=1e-6)
+    np.testing.assert_allclose(panel._readout_panel._current_oklab, colour_b, atol=1e-6)
+
+
+def test_readout_commit_signal_preserves_previous_swatch(qtbot):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+
+    colour_a = color_math.oklch_to_oklab([0.50, 0.05, math.pi / 6.0])
+    colour_b = color_math.oklch_to_oklab([0.60, 0.08, math.pi / 3.0])
+    panel.set_selected_colour(colour_a, committed=True)
+    panel._readout_panel.set_previous_colour(colour_a)
+
+    panel._readout_panel.committed.emit(np.asarray(colour_b, dtype=float).copy())
+
+    np.testing.assert_allclose(panel._readout_panel._previous_oklab, colour_a, atol=1e-6)
+    np.testing.assert_allclose(panel._readout_panel._current_oklab, colour_b, atol=1e-6)
+
+
 def test_qdock_visibility_signal_reaches_controller(qtbot):
     controller = FakeController()
     dock = QtWidgets.QDockWidget()

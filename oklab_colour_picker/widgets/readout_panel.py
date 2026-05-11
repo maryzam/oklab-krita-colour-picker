@@ -336,7 +336,11 @@ class ReadoutPanel(QtWidgets.QWidget):
         if oklab is None:
             return
         colour = np.asarray(oklab, dtype=float).copy()
-        if committed and self._current_oklab is not None:
+        if (
+            committed
+            and self._current_oklab is not None
+            and not np.allclose(colour, self._current_oklab, atol=1e-6)
+        ):
             self._previous_oklab = self._current_oklab.copy()
             self._previous_swatch.set_colour(self._previous_oklab)
         self._current_oklab = colour
