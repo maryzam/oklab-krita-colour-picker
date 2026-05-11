@@ -11,7 +11,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import ChromaLightnessModel, HueLightnessModel, LightnessSliceModel
-from oklab_colour_picker.widgets import HueRingTabWidget, LightnessSliceDiskWidget, SelectorWidget
+from oklab_colour_picker.widgets import HueRingTabWidget, LightnessSliceDiskWidget, ReadoutPanel, SelectorWidget
 
 
 ForegroundListener = Callable[[Sequence[float]], None]
@@ -75,10 +75,14 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         readout_font.setStyleHint(QtGui.QFont.Monospace)
         readout_font.setFamily("monospace")
         self._chroma_readout.setFont(readout_font)
+        self._readout_panel = ReadoutPanel(self)
+        self._readout_panel.previewed.connect(self._preview_colour)
+        self._readout_panel.committed.connect(self._commit_colour)
         self._foreground_listener = self.set_selected_colour
         self._build_selectors()
         self._build_layout()
         self._update_chroma_readout()
+        self._readout_panel.set_current_colour(self._selected_colour)
         self._controller.add_foreground_listener(self._foreground_listener)
         self.destroyed.connect(self._remove_foreground_listener)
 
@@ -116,6 +120,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
                 widget.set_model(models[mode])
             widget.set_selected_colour(self._selected_colour)
         self._update_chroma_readout()
+        self._readout_panel.set_current_colour(self._selected_colour)
 
     def _build_selectors(self) -> None:
         for mode, model in _models_for_colour(self._selected_colour).items():
@@ -133,6 +138,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         layout.setSpacing(6)
         layout.addWidget(self._tabs)
         layout.addWidget(self._chroma_readout)
+        layout.addWidget(self._readout_panel)
 
     def _update_chroma_readout(self) -> None:
         # All three tabs share LIGHTNESS_CHART_CHROMA_MAX, but the radial /
