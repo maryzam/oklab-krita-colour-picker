@@ -230,13 +230,13 @@ def test_lightness_chroma_slice_accepts_near_neutral_round_trip_without_hue_sens
     np.testing.assert_allclose(model.position_for_color(color, (101.0, 101.0)), (0.0, 50.0), atol=1e-9)
 
 
-def test_hue_lightness_slice_maps_x_to_hue_and_y_to_lightness():
+def test_hue_lightness_slice_maps_angle_to_hue_and_radius_to_lightness():
     chroma = 0.05
     model = HueLightnessSliceModel(chroma=chroma)
 
-    actual = model.color_at_position((25.0, 20.0), (101.0, 101.0))
+    actual = model.color_at_position((50.0, 25.0), (101.0, 101.0))
 
-    expected = color_math.oklch_to_oklab([0.8, chroma, math.tau * 0.25])
+    expected = color_math.oklch_to_oklab([0.5, chroma, math.pi / 2.0])
     np.testing.assert_allclose(actual, expected, atol=1e-12)
 
 
@@ -249,14 +249,14 @@ def test_hue_lightness_slice_validates_chroma(chroma):
 def test_hue_lightness_slice_rejects_position_outside_per_lightness_hue_gamut():
     model = HueLightnessSliceModel(chroma=0.2)
 
-    assert model.color_at_position((0.0, 0.0), (101.0, 101.0)) is None
+    assert model.color_at_position((50.0, 50.0), (101.0, 101.0)) is None
 
 
 def test_hue_lightness_slice_accepts_achromatic_full_lightness_range():
     model = HueLightnessSliceModel(chroma=0.0)
 
-    np.testing.assert_allclose(model.color_at_position((0.0, 0.0), (101.0, 101.0)), [1.0, 0.0, 0.0], atol=1e-12)
-    np.testing.assert_allclose(model.color_at_position((50.0, 100.0), (101.0, 101.0)), [0.0, 0.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(model.color_at_position((50.0, 50.0), (101.0, 101.0)), [0.0, 0.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(model.color_at_position((50.0, 0.0), (101.0, 101.0)), [1.0, 0.0, 0.0], atol=1e-12)
 
 
 def test_hue_lightness_slice_rejects_degenerate_or_out_of_bounds_positions():
@@ -265,9 +265,10 @@ def test_hue_lightness_slice_rejects_degenerate_or_out_of_bounds_positions():
     assert model.color_at_position((0.0, 0.0), (1.0, 100.0)) is None
     assert model.color_at_position((101.0, 50.0), (101.0, 101.0)) is None
     assert model.color_at_position((50.0, -1.0), (101.0, 101.0)) is None
+    assert model.color_at_position((0.0, 0.0), (101.0, 101.0)) is None
 
 
-@pytest.mark.parametrize("position", [(0.0, 50.0), (25.0, 45.0), (75.0, 55.0)])
+@pytest.mark.parametrize("position", [(65.0, 50.0), (50.0, 25.0), (35.0, 50.0)])
 def test_hue_lightness_slice_round_trips_position_and_color(position):
     chroma = 0.03
     model = HueLightnessSliceModel(chroma=chroma)

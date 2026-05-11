@@ -55,8 +55,8 @@ def test_render_rgba_returns_mutable_copy_without_corrupting_cache():
         ),
         (
             HueLightnessSliceModel(chroma=0.05),
-            (33, 21),
-            [(0, 10), (8, 10), (16, 0), (33, 10)],
+            (33, 33),
+            [(24, 16), (16, 8), (16, 16), (0, 0), (33, 16)],
         ),
         (
             LightnessChromaSliceModel(hue=1.25),
