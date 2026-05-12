@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict, namedtuple
 from functools import lru_cache
 from typing import Protocol, Sequence
 
@@ -9,6 +10,15 @@ import numpy as np
 import numpy.typing as npt
 
 from oklab_colour_picker import color_math
+
+
+_RENDER_CACHE_MAXSIZE = 128
+_HUE_RING_LIGHTNESS_CACHE_SCALE = 100
+_HUE_RING_CHROMA_CACHE_SCALE = 1000
+_RenderCacheInfo = namedtuple("CacheInfo", "hits misses maxsize currsize")
+_render_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
+_render_cache_hits = 0
+_render_cache_misses = 0
 
 
 class VectorizedSelectorModel(Protocol):
@@ -28,8 +38,26 @@ def render_rgba(model: VectorizedSelectorModel, size: Sequence[int]) -> np.ndarr
     return _render_rgba_cached(model, width, height).copy()
 
 
-@lru_cache(maxsize=16)
 def _render_rgba_cached(model: VectorizedSelectorModel, width: int, height: int) -> np.ndarray:
+    global _render_cache_hits, _render_cache_misses
+
+    key = _render_cache_key(model, width, height)
+    cached = _render_cache.get(key)
+    if cached is not None:
+        _render_cache_hits += 1
+        _render_cache.move_to_end(key)
+        return cached
+
+    _render_cache_misses += 1
+    rgba = _render_rgba_uncached(model, width, height)
+    _render_cache[key] = rgba
+    _render_cache.move_to_end(key)
+    while len(_render_cache) > _RENDER_CACHE_MAXSIZE:
+        _render_cache.popitem(last=False)
+    return rgba
+
+
+def _render_rgba_uncached(model: VectorizedSelectorModel, width: int, height: int) -> np.ndarray:
     x, y = _pixel_grid(width, height)
     oklab, selectable = model.colors_at_positions(x, y, (width, height))
     rgb = _quantize_srgb8(oklab)
@@ -38,6 +66,35 @@ def _render_rgba_cached(model: VectorizedSelectorModel, width: int, height: int)
     rgba[..., 3] = np.where(selectable, 255, 0).astype(np.uint8)
     rgba.setflags(write=False)
     return rgba
+
+
+def _render_cache_key(model: VectorizedSelectorModel, width: int, height: int) -> tuple:
+    if type(model).__name__ == "ChromaLightnessModel":
+        lightness = int(round(float(model.lightness) * _HUE_RING_LIGHTNESS_CACHE_SCALE))
+        chroma = int(round(float(model.chroma) * _HUE_RING_CHROMA_CACHE_SCALE))
+        return (type(model), lightness, chroma, width, height)
+    return (type(model), model, width, height)
+
+
+def _render_rgba_cache_clear() -> None:
+    global _render_cache_hits, _render_cache_misses
+
+    _render_cache.clear()
+    _render_cache_hits = 0
+    _render_cache_misses = 0
+
+
+def _render_rgba_cache_info() -> _RenderCacheInfo:
+    return _RenderCacheInfo(
+        _render_cache_hits,
+        _render_cache_misses,
+        _RENDER_CACHE_MAXSIZE,
+        len(_render_cache),
+    )
+
+
+_render_rgba_cached.cache_clear = _render_rgba_cache_clear
+_render_rgba_cached.cache_info = _render_rgba_cache_info
 
 
 def _quantize_srgb8(oklab) -> np.ndarray:

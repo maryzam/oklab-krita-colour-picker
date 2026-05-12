@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from oklab_colour_picker import color_math
+from oklab_colour_picker import renderers
 from oklab_colour_picker.renderers import render_rgba
 from oklab_colour_picker.selector_models import (
     ChromaLightnessModel,
@@ -43,6 +44,25 @@ def test_render_rgba_returns_mutable_copy_without_corrupting_cache():
     actual = render_rgba(model, (17, 17))
 
     assert np.count_nonzero(actual[..., 3]) > 0
+
+
+def test_hue_ring_render_cache_reuses_nearby_slider_preview_models(monkeypatch):
+    renderers._render_rgba_cached.cache_clear()
+    original = renderers._render_rgba_uncached
+    calls = []
+
+    def counted_render(model, width, height):
+        calls.append(model)
+        return original(model, width, height)
+
+    monkeypatch.setattr(renderers, "_render_rgba_uncached", counted_render)
+
+    first = render_rgba(ChromaLightnessModel(lightness=0.5501, chroma=0.0501), (17, 17))
+    second = render_rgba(ChromaLightnessModel(lightness=0.5502, chroma=0.0502), (17, 17))
+
+    assert len(calls) == 1
+    assert renderers._render_rgba_cached.cache_info().hits == 1
+    np.testing.assert_array_equal(first, second)
 
 
 @pytest.mark.parametrize(
