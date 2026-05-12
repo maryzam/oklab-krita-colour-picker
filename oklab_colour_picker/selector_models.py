@@ -38,6 +38,9 @@ def chroma_lightness_band_width(outer_radius: float) -> float:
 # oklch.com's 0.37 default. Validity is still gated by max_chroma_for_lh, so
 # any pixel whose chroma exceeds the per-hue gamut renders transparent.
 LIGHTNESS_CHART_CHROMA_MAX = 0.325
+_LIGHTNESS_SNAP_SAMPLES = np.linspace(0.0, 1.0, 257)
+_HUE_SNAP_SAMPLES = np.linspace(0.0, math.tau, 361, endpoint=False)
+_SNAP_BOUNDARY_ITERATIONS = 20
 
 Position = tuple[float, float]
 Size = tuple[float, float]
@@ -219,13 +222,11 @@ class LightnessChromaSliceModel:
         self, position: Sequence[float], size: Sequence[float]
     ) -> np.ndarray | None:
         """In-gamut colour nearest the drag cursor on this hue plane."""
-        bounds = _size_bounds(size)
-        if bounds is None:
+        geometry = _rect_geometry_projected(position, size)
+        if geometry is None:
             return None
 
-        width, height = bounds
-        x = float(np.clip(float(position[0]), 0.0, width - 1.0))
-        y = float(np.clip(float(position[1]), 0.0, height - 1.0))
+        x, y, width, height = geometry
         lightness = 1.0 - y / (height - 1.0)
         desired_chroma = (x / (width - 1.0)) * LIGHTNESS_CHART_CHROMA_MAX
         max_chroma = float(color_math.max_chroma_for_lh(lightness, self.hue))
@@ -315,16 +316,9 @@ class HueLightnessSliceModel:
 
         normalized_radius, hue = geometry
         desired_lightness = 1.0 - normalized_radius
-        if self.chroma <= color_math.max_chroma_for_lh(desired_lightness, hue) + CHROMA_EPSILON:
-            lightness = desired_lightness
-        else:
-            samples = np.linspace(0.0, 1.0, 257)
-            valid = self.chroma <= color_math.max_chroma_for_lh(samples, hue) + CHROMA_EPSILON
-            valid_indices = np.flatnonzero(valid)
-            if not valid_indices.size:
-                return None
-            candidates = samples[valid_indices]
-            lightness = float(candidates[int(np.argmin(np.abs(candidates - desired_lightness)))])
+        lightness = _snap_lightness_to_gamut(self.chroma, hue, desired_lightness)
+        if lightness is None:
+            return None
         return color_math.oklch_to_oklab([lightness, self.chroma, hue])
 
 
@@ -397,17 +391,33 @@ class ChromaLightnessModel:
             return None
 
         _, hue = geometry
-        if self.chroma > color_math.max_chroma_for_lh(self.lightness, hue) + CHROMA_EPSILON:
+        hue = _snap_hue_to_gamut(self.lightness, self.chroma, hue)
+        if hue is None:
             return None
         return color_math.oklch_to_oklab([self.lightness, self.chroma, hue])
 
 
 def _circle_geometry(position: Sequence[float], size: Sequence[float]):
-    bounds = _position_in_bounds(position, size)
+    return _circle_geometry_core(position, size, project=False)
+
+
+def _circle_geometry_projected(position: Sequence[float], size: Sequence[float]):
+    geometry = _circle_geometry_core(position, size, project=True)
+    if geometry is None:
+        return None
+    normalized_radius, hue, _, _ = geometry
+    return normalized_radius, hue
+
+
+def _circle_geometry_core(position: Sequence[float], size: Sequence[float], *, project: bool):
+    bounds = _size_bounds(size)
     if bounds is None:
         return None
 
-    x, y, width, height = bounds
+    width, height = bounds
+    x, y = (float(position[0]), float(position[1]))
+    if not project and not (0.0 <= x <= width - 1.0 and 0.0 <= y <= height - 1.0):
+        return None
     radius = (min(width, height) - 1.0) / 2.0
     if radius <= 0.0:
         return None
@@ -417,34 +427,22 @@ def _circle_geometry(position: Sequence[float], size: Sequence[float]):
     dx = x - center_x
     dy = center_y - y
     distance = math.hypot(dx, dy)
-    if distance > radius + POSITION_EPSILON:
+    if not project and distance > radius + POSITION_EPSILON:
         return None
 
     hue = 0.0 if distance <= POSITION_EPSILON else math.atan2(dy, dx) % math.tau
     return min(distance / radius, 1.0), hue, center_x, radius
 
 
-def _circle_geometry_projected(position: Sequence[float], size: Sequence[float]):
+def _rect_geometry_projected(position: Sequence[float], size: Sequence[float]):
     bounds = _size_bounds(size)
     if bounds is None:
         return None
 
     width, height = bounds
-    radius = (min(width, height) - 1.0) / 2.0
-    if radius <= 0.0:
-        return None
-
-    center_x = (width - 1.0) / 2.0
-    center_y = (height - 1.0) / 2.0
-    x, y = (float(position[0]), float(position[1]))
-    dx = x - center_x
-    dy = center_y - y
-    distance = math.hypot(dx, dy)
-    if distance <= POSITION_EPSILON:
-        return 0.0, 0.0
-
-    hue = math.atan2(dy, dx) % math.tau
-    return min(distance / radius, 1.0), hue
+    x = float(np.clip(float(position[0]), 0.0, width - 1.0))
+    y = float(np.clip(float(position[1]), 0.0, height - 1.0))
+    return x, y, width, height
 
 
 def _circle_geometry_arrays(x, y, size: Sequence[float]):
@@ -466,6 +464,74 @@ def _circle_geometry_arrays(x, y, size: Sequence[float]):
     normalized_radius = np.minimum(distance / radius, 1.0)
     hue = np.where(distance <= POSITION_EPSILON, 0.0, np.mod(np.arctan2(dy, dx), math.tau))
     return normalized_radius, hue, circle_valid
+
+
+def _snap_lightness_to_gamut(chroma: float, hue: float, desired_lightness: float) -> float | None:
+    if _lightness_in_gamut(chroma, hue, desired_lightness):
+        return desired_lightness
+
+    valid = chroma <= color_math.max_chroma_for_lh(_LIGHTNESS_SNAP_SAMPLES, hue) + CHROMA_EPSILON
+    valid_indices = np.flatnonzero(valid)
+    if not valid_indices.size:
+        return None
+
+    first = int(valid_indices[0])
+    last = int(valid_indices[-1])
+    lower = float(_LIGHTNESS_SNAP_SAMPLES[first])
+    upper = float(_LIGHTNESS_SNAP_SAMPLES[last])
+    if desired_lightness < lower and first > 0:
+        return _bisect_lightness_boundary(
+            chroma,
+            hue,
+            invalid_lightness=float(_LIGHTNESS_SNAP_SAMPLES[first - 1]),
+            valid_lightness=lower,
+        )
+    if desired_lightness > upper and last + 1 < _LIGHTNESS_SNAP_SAMPLES.size:
+        return _bisect_lightness_boundary(
+            chroma,
+            hue,
+            invalid_lightness=float(_LIGHTNESS_SNAP_SAMPLES[last + 1]),
+            valid_lightness=upper,
+        )
+
+    candidates = _LIGHTNESS_SNAP_SAMPLES[valid_indices]
+    return float(candidates[int(np.argmin(np.abs(candidates - desired_lightness)))])
+
+
+def _bisect_lightness_boundary(
+    chroma: float,
+    hue: float,
+    *,
+    invalid_lightness: float,
+    valid_lightness: float,
+) -> float:
+    invalid = invalid_lightness
+    valid = valid_lightness
+    for _ in range(_SNAP_BOUNDARY_ITERATIONS):
+        midpoint = (invalid + valid) / 2.0
+        if _lightness_in_gamut(chroma, hue, midpoint):
+            valid = midpoint
+        else:
+            invalid = midpoint
+    return float(valid)
+
+
+def _lightness_in_gamut(chroma: float, hue: float, lightness: float) -> bool:
+    return bool(chroma <= color_math.max_chroma_for_lh(lightness, hue) + CHROMA_EPSILON)
+
+
+def _snap_hue_to_gamut(lightness: float, chroma: float, desired_hue: float) -> float | None:
+    if chroma <= color_math.max_chroma_for_lh(lightness, desired_hue) + CHROMA_EPSILON:
+        return desired_hue
+
+    valid = chroma <= color_math.max_chroma_for_lh(lightness, _HUE_SNAP_SAMPLES) + CHROMA_EPSILON
+    valid_indices = np.flatnonzero(valid)
+    if not valid_indices.size:
+        return None
+
+    candidates = _HUE_SNAP_SAMPLES[valid_indices]
+    deltas = np.abs((candidates - desired_hue + math.pi) % math.tau - math.pi)
+    return float(candidates[int(np.argmin(deltas))])
 
 
 def _position_from_circle(normalized_radius: float, hue: float, size: Sequence[float]) -> Position | None:

@@ -45,23 +45,6 @@ class LightnessSliceDiskWidget(SelectorWidget):
         super().__init__(model, parent)
         self._gamut_path_cache_key: tuple[float, int, int] | None = None
         self._gamut_path_cache: QtGui.QPainterPath | None = None
-        # Retained for the drag lifecycle tests and for future subclasses that
-        # need to know whether a left-button movement has occurred. Snapping
-        # itself is now handled by SelectorWidget after a drag has visited a
-        # valid colour, so plain out-of-gamut clicks still cancel.
-        self._drag_in_progress = False
-
-    def mouseMoveEvent(self, event):  # type: ignore[override]
-        if event.buttons() & QtCore.Qt.LeftButton:
-            self._drag_in_progress = True
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):  # type: ignore[override]
-        try:
-            super().mouseReleaseEvent(event)
-        finally:
-            if event.button() == QtCore.Qt.LeftButton:
-                self._drag_in_progress = False
 
     def set_model(self, model) -> None:  # type: ignore[override]
         super().set_model(model)

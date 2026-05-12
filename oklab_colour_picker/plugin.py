@@ -78,9 +78,7 @@ def create_dock_widget_class(
         def canvasChanged(self, canvas) -> None:
             if self._controller is None:
                 return
-            sync = getattr(self._controller, "sync_external_foreground", None)
-            if callable(sync):
-                sync()
+            self._controller.sync_external_foreground()
 
         def _disconnect_visibility(self) -> None:
             if self._visibility_connection is not None:

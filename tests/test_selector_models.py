@@ -385,6 +385,16 @@ def test_chroma_lightness_snap_projects_interior_to_ring_hue():
     np.testing.assert_allclose(snapped, expected, atol=1e-12)
 
 
+def test_chroma_lightness_snap_projects_to_nearest_valid_hue_when_ring_has_gap():
+    model = ChromaLightnessModel(lightness=0.5, chroma=0.2)
+    assert model.color_at_position((50.0, 0.0), (101.0, 101.0)) is None
+
+    snapped = model.snapped_color_at_position((50.0, 0.0), (101.0, 101.0))
+
+    assert snapped is not None
+    assert model.position_for_color(snapped, (101.0, 101.0)) is not None
+
+
 def test_chroma_lightness_rejects_inverse_color_with_mismatched_chroma():
     model = ChromaLightnessModel(lightness=0.55, chroma=0.05)
 

@@ -169,6 +169,8 @@ class _GradientSlider(QtWidgets.QSlider):
         if event.button() != QtCore.Qt.LeftButton:
             super().mousePressEvent(event)
             return
+        # Use the full widget height as the hit target, matching native
+        # sliders while still mapping horizontally through the visible track.
         self.setSliderDown(True)
         self.setValue(self._value_at_x(event.x()))
         event.accept()

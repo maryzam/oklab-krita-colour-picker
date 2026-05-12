@@ -69,6 +69,8 @@ class ColourPickerController:
         self._dock_visible = bool(initially_visible)
 
         if self._dock_visible:
+            # Initial foreground is pulled before UI listeners exist; dock
+            # consumers seed themselves by reading selected_colour afterward.
             self.sync_external_foreground()
         if self._foreground_timer is not None and self._dock_visible:
             self._foreground_timer.start(self._foreground_poll_interval_ms, self.sync_external_foreground)

@@ -146,6 +146,37 @@ def test_readout_slider_click_jumps_to_clicked_position(qtbot):
     assert lightness == pytest.approx(0.75, abs=0.02)
 
 
+def test_readout_slider_drag_previews_and_commits_release_position(qtbot):
+    panel = ReadoutPanel()
+    panel.resize(320, 200)
+    qtbot.addWidget(panel)
+    panel.show()
+    qtbot.waitExposed(panel)
+
+    panel.set_current_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]))
+    commits: list[np.ndarray] = []
+    previews: list[np.ndarray] = []
+    panel.previewed.connect(lambda colour: previews.append(np.asarray(colour, dtype=float)))
+    panel.committed.connect(lambda colour: commits.append(np.asarray(colour, dtype=float)))
+
+    slider = panel._row_l.slider
+    track = slider._track_rect()
+    start = QtCore.QPoint(track.left() + int(round(track.width() * 0.25)), track.center().y())
+    middle = QtCore.QPoint(track.left() + int(round(track.width() * 0.50)), track.center().y())
+    end = QtCore.QPoint(track.left() + int(round(track.width() * 0.75)), track.center().y())
+
+    _send_mouse(slider, QtCore.QEvent.MouseButtonPress, start)
+    _send_mouse(slider, QtCore.QEvent.MouseMove, middle)
+    _send_mouse(slider, QtCore.QEvent.MouseButtonRelease, end)
+
+    assert len(previews) >= 2
+    assert len(commits) == 1
+    preview_lightness = [float(color_math.oklab_to_oklch(colour)[0]) for colour in previews]
+    assert any(value == pytest.approx(0.50, abs=0.02) for value in preview_lightness)
+    committed_lightness, _, _ = color_math.oklab_to_oklch(commits[0])
+    assert committed_lightness == pytest.approx(0.75, abs=0.02)
+
+
 def test_readout_panel_hex_field_reflects_current_colour(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
