@@ -14,6 +14,7 @@ from oklab_colour_picker import color_math
 from oklab_colour_picker.dock import ColourPickerDockPanel, SelectorMode, connect_dock_visibility
 from oklab_colour_picker.plugin import DOCK_FACTORY_ID, DOCK_TITLE, create_dock_widget_class, register_plugin
 from oklab_colour_picker.widgets import HueLightnessSliceDiskWidget
+import oklab_colour_picker.dock as dock_module
 import oklab_colour_picker.plugin as plugin_module
 
 
@@ -39,6 +40,34 @@ def test_dock_panel_constructs_all_selector_views_and_switches_modes(qtbot):
 
     assert panel.mode == SelectorMode.LIGHTNESS_CHROMA_SLICE
     assert panel.active_selector is panel.selector_for_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
+
+
+def test_dock_panel_initializes_only_active_selector_view(qtbot):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+
+    assert tuple(panel._selectors) == (SelectorMode.LIGHTNESS_SLICE,)
+    assert panel._tabs.count() == len(SelectorMode)
+    assert panel._tabs.widget(0) is panel.selector_for_mode(SelectorMode.LIGHTNESS_SLICE)
+    assert panel._tabs.widget(1).objectName() == "hue-lightness-slice-selector-placeholder"
+
+
+def test_dock_panel_initializes_only_active_selector_model(qtbot, monkeypatch):
+    controller = FakeController()
+    original = dock_module._model_for_colour
+    model_calls = []
+
+    def counted_model_for_colour(mode, colour):
+        model_calls.append(mode)
+        return original(mode, colour)
+
+    monkeypatch.setattr(dock_module, "_model_for_colour", counted_model_for_colour)
+
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+
+    assert model_calls == [SelectorMode.LIGHTNESS_SLICE]
 
 
 def test_dock_panel_uses_current_foreground_on_construction(qtbot):
@@ -112,6 +141,21 @@ def test_external_foreground_sync_updates_all_selector_views(qtbot):
     for widget in panel.selector_widgets:
         np.testing.assert_allclose(widget.selected_colour, colour)
         assert widget.indicator_position() is not None
+
+
+def test_lazy_selector_uses_latest_colour_when_first_built(qtbot):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    colour = color_math.oklch_to_oklab([0.42, 0.06, math.pi / 4.0])
+
+    panel.set_selected_colour(colour)
+    assert SelectorMode.LIGHTNESS_CHROMA_SLICE not in panel._selectors
+
+    widget = panel.selector_for_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
+
+    np.testing.assert_allclose(widget.selected_colour, colour)
+    assert widget.indicator_position() is not None
 
 
 def test_indicator_maps_to_same_colour_after_resize(qtbot):

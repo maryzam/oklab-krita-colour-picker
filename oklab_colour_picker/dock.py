@@ -16,13 +16,8 @@ from oklab_colour_picker.selector_models import (
     LightnessChromaSliceModel,
     LightnessSliceModel,
 )
-from oklab_colour_picker.widgets import (
-    HueLightnessSliceDiskWidget,
-    HueRingTabWidget,
-    LightnessSliceDiskWidget,
-    ReadoutPanel,
-    SelectorWidget,
-)
+from oklab_colour_picker.widgets.readout_panel import ReadoutPanel
+from oklab_colour_picker.widgets.selector import SelectorWidget
 
 
 ForegroundListener = Callable[[Sequence[float]], None]
@@ -80,14 +75,16 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         super().__init__(parent)
         self._controller = controller
         self._selected_colour = _selected_or_default(controller.selected_colour)
+        self._selector_modes = tuple(SelectorMode)
         self._tabs = QtWidgets.QTabWidget(self)
-        self._selectors: dict[SelectorMode, SelectorWidget] = {}
+        self._selectors: dict[SelectorMode, QtWidgets.QWidget] = {}
         self._readout_panel = ReadoutPanel(self)
         self._readout_panel.previewed.connect(self._preview_colour)
         self._readout_panel.committed.connect(self._commit_colour)
         self._foreground_listener = self.set_selected_colour
-        self._build_selectors()
+        self._build_selector_tabs()
         self._build_layout()
+        self._tabs.currentChanged.connect(self._ensure_selector_for_tab)
         self._readout_panel.set_current_colour(self._selected_colour)
         # Seed previous swatch with the initial foreground so the first
         # display has a meaningful revert target (current == previous).
@@ -97,26 +94,26 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
 
     @property
     def selector_widgets(self) -> tuple[SelectorWidget, ...]:
-        return tuple(self._selectors[mode] for mode in SelectorMode)
+        return tuple(self.selector_for_mode(mode) for mode in SelectorMode)
 
     @property
     def mode(self) -> SelectorMode:
-        current = self._tabs.currentWidget()
-        for mode, widget in self._selectors.items():
-            if widget is current:
-                return mode
-        return SelectorMode.LIGHTNESS_SLICE
+        index = self._tabs.currentIndex()
+        if 0 <= index < len(self._selector_modes):
+            return self._selector_modes[index]
+        return self._selector_modes[0]
 
     @property
     def active_selector(self) -> SelectorWidget:
-        return self._selectors[self.mode]
+        return self.selector_for_mode(self.mode)
 
     def selector_for_mode(self, mode: SelectorMode | str) -> SelectorWidget:
-        return self._selectors[SelectorMode(mode)]
+        return self._ensure_selector(SelectorMode(mode))
 
     def set_mode(self, mode: SelectorMode | str) -> None:
-        widget = self.selector_for_mode(mode)
-        self._tabs.setCurrentWidget(widget)
+        selector_mode = SelectorMode(mode)
+        self._ensure_selector(selector_mode)
+        self._tabs.setCurrentIndex(self._tab_index_for_mode(selector_mode))
 
     def set_selected_colour(
         self, oklab: Sequence[float] | None, *, committed: bool = True
@@ -125,24 +122,54 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
             return
 
         self._selected_colour = _as_oklab(oklab)
-        models = _models_for_colour(self._selected_colour)
         for mode, widget in self._selectors.items():
-            if widget.model != models[mode]:
-                widget.set_model(models[mode])
+            model = _model_for_colour(mode, self._selected_colour)
+            if widget.model != model:
+                widget.set_model(model)
             widget.set_selected_colour(self._selected_colour)
         self._readout_panel.set_current_colour(
             self._selected_colour, committed=committed
         )
 
-    def _build_selectors(self) -> None:
-        for mode, model in _models_for_colour(self._selected_colour).items():
-            widget = _build_selector_widget(mode, model, self)
-            widget.setObjectName(MODE_OBJECT_NAMES[mode])
-            widget.set_selected_colour(self._selected_colour)
-            widget.previewed.connect(self._preview_colour)
-            widget.committed.connect(self._commit_colour)
-            self._selectors[mode] = widget
+    def _build_selector_tabs(self) -> None:
+        for mode in self._selector_modes:
+            if mode == self._selector_modes[0]:
+                widget = self._ensure_selector(mode)
+            else:
+                widget = QtWidgets.QWidget(self)
+                widget.setObjectName(f"{MODE_OBJECT_NAMES[mode]}-placeholder")
             self._tabs.addTab(widget, MODE_LABELS[mode])
+
+    def _ensure_selector_for_tab(self, index: int) -> None:
+        if 0 <= index < len(self._selector_modes):
+            self._ensure_selector(self._selector_modes[index])
+
+    def _ensure_selector(self, mode: SelectorMode) -> SelectorWidget:
+        existing = self._selectors.get(mode)
+        if existing is not None:
+            return existing
+
+        widget = _build_selector_widget(mode, _model_for_colour(mode, self._selected_colour), self)
+        widget.setObjectName(MODE_OBJECT_NAMES[mode])
+        widget.set_selected_colour(self._selected_colour)
+        widget.previewed.connect(self._preview_colour)
+        widget.committed.connect(self._commit_colour)
+        self._selectors[mode] = widget
+
+        index = self._tab_index_for_mode(mode)
+        if index < self._tabs.count():
+            current_index = self._tabs.currentIndex()
+            placeholder = self._tabs.widget(index)
+            self._tabs.removeTab(index)
+            self._tabs.insertTab(index, widget, MODE_LABELS[mode])
+            if placeholder is not None:
+                placeholder.deleteLater()
+            if current_index == index:
+                self._tabs.setCurrentIndex(index)
+        return widget
+
+    def _tab_index_for_mode(self, mode: SelectorMode) -> int:
+        return self._selector_modes.index(mode)
 
     def _build_layout(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
@@ -193,28 +220,34 @@ def _build_selector_widget(
     mode: SelectorMode,
     model: object,
     parent: QtWidgets.QWidget,
-) -> SelectorWidget | HueRingTabWidget:
+) -> SelectorWidget | QtWidgets.QWidget:
     if mode == SelectorMode.CHROMA_LIGHTNESS:
+        from oklab_colour_picker.widgets.hue_ring_tab import HueRingTabWidget
+
         return HueRingTabWidget(model, parent)
     if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
+        from oklab_colour_picker.widgets.hue_lightness_slice_disk import HueLightnessSliceDiskWidget
+
         return HueLightnessSliceDiskWidget(model, parent)
     if mode == SelectorMode.LIGHTNESS_SLICE:
+        from oklab_colour_picker.widgets.lightness_slice_disk import LightnessSliceDiskWidget
+
         return LightnessSliceDiskWidget(model, parent)
     return SelectorWidget(model, parent)
 
 
-def _models_for_colour(oklab: Sequence[float]) -> dict[SelectorMode, object]:
+def _model_for_colour(mode: SelectorMode, oklab: Sequence[float]) -> object:
     lightness, chroma, hue = color_math.oklab_to_oklch(_as_oklab(oklab))
+    lightness = float(np.clip(lightness, 0.0, 1.0))
+    chroma = max(0.0, float(chroma))
     hue = float(hue % math.tau)
-    return {
-        SelectorMode.LIGHTNESS_SLICE: LightnessSliceModel(lightness=float(np.clip(lightness, 0.0, 1.0))),
-        SelectorMode.HUE_LIGHTNESS_SLICE: HueLightnessSliceModel(chroma=max(0.0, float(chroma))),
-        SelectorMode.LIGHTNESS_CHROMA_SLICE: LightnessChromaSliceModel(hue=hue),
-        SelectorMode.CHROMA_LIGHTNESS: ChromaLightnessModel(
-            lightness=float(np.clip(lightness, 0.0, 1.0)),
-            chroma=max(0.0, float(chroma)),
-        ),
-    }
+    if mode == SelectorMode.LIGHTNESS_SLICE:
+        return LightnessSliceModel(lightness=lightness)
+    if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
+        return HueLightnessSliceModel(chroma=chroma)
+    if mode == SelectorMode.LIGHTNESS_CHROMA_SLICE:
+        return LightnessChromaSliceModel(hue=hue)
+    return ChromaLightnessModel(lightness=lightness, chroma=chroma)
 
 
 def _selected_or_default(oklab: Sequence[float] | None) -> np.ndarray:
