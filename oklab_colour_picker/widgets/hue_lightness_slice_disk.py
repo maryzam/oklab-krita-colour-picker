@@ -33,7 +33,7 @@ class HueLightnessSliceDiskWidget(SelectorWidget):
         pen.setCosmetic(True)
         painter.setPen(pen)
         for lightness in self._LIGHTNESS_RINGS:
-            ring_radius = radius * lightness
+            ring_radius = radius * (1.0 - lightness)
             if ring_radius <= 0.5 or ring_radius > radius:
                 continue
             painter.drawEllipse(QtCore.QPointF(cx, cy), ring_radius, ring_radius)

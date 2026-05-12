@@ -240,6 +240,13 @@ def test_hue_lightness_slice_maps_angle_to_hue_and_radius_to_lightness():
     np.testing.assert_allclose(actual, expected, atol=1e-12)
 
 
+def test_hue_lightness_slice_maps_center_to_white_and_rim_to_black():
+    model = HueLightnessSliceModel(chroma=0.0)
+
+    np.testing.assert_allclose(model.color_at_position((50.0, 50.0), (101.0, 101.0)), [1.0, 0.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(model.color_at_position((100.0, 50.0), (101.0, 101.0)), [0.0, 0.0, 0.0], atol=1e-12)
+
+
 @pytest.mark.parametrize("chroma", [-0.01, math.nan])
 def test_hue_lightness_slice_validates_chroma(chroma):
     with pytest.raises(ValueError, match="chroma"):
@@ -255,8 +262,8 @@ def test_hue_lightness_slice_rejects_position_outside_per_lightness_hue_gamut():
 def test_hue_lightness_slice_accepts_achromatic_full_lightness_range():
     model = HueLightnessSliceModel(chroma=0.0)
 
-    np.testing.assert_allclose(model.color_at_position((50.0, 50.0), (101.0, 101.0)), [0.0, 0.0, 0.0], atol=1e-12)
-    np.testing.assert_allclose(model.color_at_position((50.0, 0.0), (101.0, 101.0)), [1.0, 0.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(model.color_at_position((50.0, 50.0), (101.0, 101.0)), [1.0, 0.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(model.color_at_position((50.0, 0.0), (101.0, 101.0)), [0.0, 0.0, 0.0], atol=1e-12)
 
 
 def test_hue_lightness_slice_rejects_degenerate_or_out_of_bounds_positions():
