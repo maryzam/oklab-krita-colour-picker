@@ -114,6 +114,18 @@ def test_set_model_invalidates_gamut_path_cache(qtbot):
     assert second is not first
 
 
+def test_gamut_contour_uses_180_hue_samples(qtbot):
+    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(80, 80)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    path = widget._gamut_path(widget.model.lightness)
+
+    assert path is not None
+    assert path.elementCount() == 181
+
+
 def test_resize_invalidates_gamut_path_cache(qtbot):
     widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
     widget.resize(80, 80)
@@ -122,9 +134,31 @@ def test_resize_invalidates_gamut_path_cache(qtbot):
 
     widget._gamut_path(widget.model.lightness)
     assert widget._gamut_path_cache_key == (0.5, 80, 80)
+    assert widget._gamut_contour_cache_key == 0.5
 
     widget.resize(100, 100)
     assert widget._gamut_path_cache_key is None
+    assert widget._gamut_contour_cache_key == 0.5
+
+
+def test_resize_reuses_expensive_gamut_contour_cache(qtbot, monkeypatch):
+    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(80, 80)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    first = widget._gamut_path(widget.model.lightness)
+    assert first is not None
+
+    def fail_on_boundary_solver(*_args, **_kwargs):
+        raise AssertionError("resize should reuse normalized gamut contour")
+
+    monkeypatch.setattr(color_math, "max_chroma_for_lh", fail_on_boundary_solver)
+    widget.resize(100, 100)
+    second = widget._gamut_path(widget.model.lightness)
+
+    assert second is not None
+    assert second is not first
 
 
 def test_gamut_path_caps_at_disk_radius(qtbot):

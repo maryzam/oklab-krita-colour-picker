@@ -38,12 +38,15 @@ class LightnessSliceDiskWidget(SelectorWidget):
     """Hue/Chroma disk that overlays chroma rings and a gamut contour."""
 
     _CHROMA_RINGS: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20, 0.25)
-    _GAMUT_HUE_SAMPLES = 360
+    _GAMUT_HUE_SAMPLES = 180
+    _CONTOUR_LIGHTNESS_KEY_PRECISION = 4
 
     def __init__(self, model: LightnessSliceModel, parent=None) -> None:
         super().__init__(model, parent)
         self._gamut_path_cache_key: tuple[float, int, int] | None = None
         self._gamut_path_cache: QtGui.QPainterPath | None = None
+        self._gamut_contour_cache_key: float | None = None
+        self._gamut_contour_cache: tuple[np.ndarray, np.ndarray] | None = None
 
     def set_model(self, model) -> None:  # type: ignore[override]
         super().set_model(model)
@@ -127,16 +130,8 @@ class LightnessSliceDiskWidget(SelectorWidget):
         if self._gamut_path_cache_key == key and self._gamut_path_cache is not None:
             return self._gamut_path_cache
 
-        hues = np.linspace(0.0, math.tau, self._GAMUT_HUE_SAMPLES, endpoint=False)
-        max_chroma = np.asarray(
-            color_math.max_chroma_for_lh(np.full_like(hues, lightness), hues),
-            dtype=float,
-        )
-        # Cap at the disk's chroma extent so the contour traces the rim
-        # rather than running off the widget where the gamut leaf bulges
-        # past color_math.SRGB_MAX_CHROMA.
-        capped = np.minimum(max_chroma, color_math.SRGB_MAX_CHROMA)
-        radii = radius * capped / color_math.SRGB_MAX_CHROMA
+        hues, normalized_radii = self._gamut_contour(lightness)
+        radii = radius * normalized_radii
         xs = cx + radii * np.cos(hues)
         ys = cy - radii * np.sin(hues)
 
@@ -149,6 +144,25 @@ class LightnessSliceDiskWidget(SelectorWidget):
         self._gamut_path_cache_key = key
         self._gamut_path_cache = path
         return path
+
+    def _gamut_contour(self, lightness: float) -> tuple[np.ndarray, np.ndarray]:
+        key = round(float(lightness), self._CONTOUR_LIGHTNESS_KEY_PRECISION)
+        if self._gamut_contour_cache_key == key and self._gamut_contour_cache is not None:
+            return self._gamut_contour_cache
+
+        hues = np.linspace(0.0, math.tau, self._GAMUT_HUE_SAMPLES, endpoint=False)
+        max_chroma = np.asarray(
+            color_math.max_chroma_for_lh(np.full_like(hues, key), hues),
+            dtype=float,
+        )
+        # Cap at the disk's chroma extent so the contour traces the rim
+        # rather than running off the widget where the gamut leaf bulges
+        # past color_math.SRGB_MAX_CHROMA.
+        capped = np.minimum(max_chroma, color_math.SRGB_MAX_CHROMA)
+        normalized_radii = capped / color_math.SRGB_MAX_CHROMA
+        self._gamut_contour_cache_key = key
+        self._gamut_contour_cache = (hues, normalized_radii)
+        return self._gamut_contour_cache
 
     def _disk_geometry(self) -> tuple[float, float, float] | None:
         width, height = self.width(), self.height()
