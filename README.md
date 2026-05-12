@@ -1,117 +1,60 @@
-# oklab-krita-colour-picker
+# OKLab Colour Selector for Krita
 
-The OKLab/OKCLh colour space was introduced in 2020 [by Björn Ottosson](https://bottosson.github.io/posts/oklab/).
+A perceptual colour picker docker for Krita, built around OKLab and OKLCh.
+Pick colours by lightness, chroma, and hue, preview them interactively, and
+commit the result to Krita's foreground colour.
 
-This repo contains an attempt to bring OKLab/OKCLh colour picker to Krita in performant and user-friendly format that are aligned with the Krita's software phylosophy.
+OKLab is designed to make colour edits feel more even to human vision than
+RGB or HSL controls. This plugin brings that workflow into Krita as a compact
+docker with multiple selector views, numeric controls, swatches, and hex input.
 
-More information to come. Stay tuned...
+## Highlights
 
-## Installing from source
+- Pick in OKLab/OKLCh space with perceptual lightness, chroma, and hue controls.
+- Switch between Hue/Chroma, Hue/Lightness, Lightness/Chroma, and Hue Ring views.
+- Use gradient L/C/H sliders, numeric inputs, current/previous swatches, and hex entry.
+- Preview colours while dragging, then commit the chosen colour to Krita.
+- Keep selections inside the visible sRGB gamut.
 
-The plugin lives in `oklab_colour_picker/`, with the Krita manifest at
-`oklab_colour_picker.desktop`.
+## Install
 
-### Prerequisites
+Requires Krita 5.2 or newer and NumPy available to Krita's Python.
 
-- Krita 5.2 or newer (Python plugin support, PyQt5).
-- **NumPy** available to Krita's Python. Krita's bundled Python on Windows and
-  macOS does not ship NumPy. If NumPy is missing the docker will load with a
-  friendly placeholder message instead of the colour selector.
+1. Copy `oklab_colour_picker/` and `oklab_colour_picker.desktop` into Krita's
+   `pykrita/` folder.
+2. Restart Krita.
+3. Enable **OKLab Colour Selector** in **Settings > Configure Krita... >
+   Python Plugin Manager**.
+4. Restart Krita again.
+5. Open **Settings > Dockers > OKLab Colour Selector**.
 
-Installing NumPy into Krita's Python:
+See [docs/install.md](docs/install.md) for platform-specific install commands
+and NumPy setup.
 
-- **Linux** — Krita typically uses the system Python. Install via your package
-  manager (`sudo apt install python3-numpy`, `sudo dnf install python3-numpy`,
-  etc.) or `pip install --user numpy`.
-- **Windows** — if NumPy is missing, open the docker and click
-  **Install NumPy**. The plugin uses Krita's bundled `python.exe` (or runs pip
-  in-process if no standalone interpreter is bundled) to download NumPy from
-  PyPI into `oklab_colour_picker/site-packages` under Krita's app data folder,
-  then prompts you to restart Krita. The plugin adds that folder to `sys.path`
-  before importing NumPy. To install manually into the same vendor folder, run
-  from a Command Prompt:
-  ```
-  "C:\Program Files\Krita (x64)\bin\python.exe" -m pip install ^
-    --upgrade --only-binary=:all: ^
-    --target "%APPDATA%\krita\oklab_colour_picker\site-packages" ^
-    "numpy>=1.26,<3"
-  ```
-- **macOS** — Krita's bundled Python lives inside the app bundle. From a
-  Terminal:
-  ```sh
-  /Applications/krita.app/Contents/MacOS/krita_python -m pip install numpy
-  ```
-  If `krita_python` is not present on your build, follow the Krita docs for
-  installing Python packages on your platform.
+## Use
 
-### 1. Locate Krita's resource folder
+Open the docker, choose a selector tab, then drag inside the selector or adjust
+the L/C/H controls. The docker previews the colour as you work and commits
+valid selections to Krita's foreground colour.
 
-In Krita: **Settings → Manage Resources… → Open Resource Folder**. Typical
-defaults:
+See [docs/usage.md](docs/usage.md) for a short guide to the selector modes and
+controls.
 
-- Linux: `~/.local/share/krita/`
-- macOS: `~/Library/Application Support/krita/`
-- Windows: `%APPDATA%\krita\`
+## Promo Assets
 
-If a `pykrita/` subfolder does not exist, create one.
+The README is designed for a compact screenshot set:
 
-### 2. Copy the plugin into `pykrita/`
+- `docs/assets/readme/hero.png` - the docker inside Krita.
+- `docs/assets/readme/hue-ring.png` - Hue Ring view with swatch and sliders.
+- `docs/assets/readme/selector-tabs.png` - the alternate selector modes.
+- `docs/assets/readme/demo.webp` - optional short drag-and-preview loop.
 
-From a clone of this repo, copy the package folder and the `.desktop` manifest
-into `pykrita/` so you end up with:
+Capture guidance lives in [docs/promo-assets.md](docs/promo-assets.md).
 
-```
-pykrita/
-├── oklab_colour_picker.desktop
-└── oklab_colour_picker/
-    ├── __init__.py
-    ├── plugin.py
-    └── ... (the rest of the package)
-```
+## Troubleshooting
 
-Linux:
+If the plugin does not appear, confirm the `.desktop` file is directly inside
+Krita's `pykrita/` folder. If the docker reports a missing dependency, install
+NumPy into Krita's Python and restart Krita.
 
-```sh
-cp -r oklab_colour_picker          ~/.local/share/krita/pykrita/
-cp    oklab_colour_picker.desktop  ~/.local/share/krita/pykrita/
-```
-
-macOS:
-
-```sh
-cp -r oklab_colour_picker          ~/Library/Application\ Support/krita/pykrita/
-cp    oklab_colour_picker.desktop  ~/Library/Application\ Support/krita/pykrita/
-```
-
-Windows (Command Prompt):
-
-```
-xcopy /E /I oklab_colour_picker "%APPDATA%\krita\pykrita\oklab_colour_picker"
-copy oklab_colour_picker.desktop "%APPDATA%\krita\pykrita\"
-```
-
-You may symlink instead of copying if you want `git pull` to update the
-installed version.
-
-### 3. Enable the plugin
-
-1. Restart Krita.
-2. **Settings → Configure Krita… → Python Plugin Manager**.
-3. Tick **OKLab Colour Selector** and click **OK**.
-4. Restart Krita again so the plugin is loaded.
-
-### 4. Open the docker
-
-**Settings → Dockers → OKLab Colour Selector**. Drag it into your workspace
-like any other docker.
-
-### Troubleshooting
-
-- **Plugin missing from the Plugin Manager** — confirm
-  `oklab_colour_picker.desktop` sits directly inside `pykrita/`, not nested
-  inside the `oklab_colour_picker/` subfolder.
-- **Docker shows "missing dependency" message** — click **Install NumPy** in
-  the docker, or install NumPy manually (see Prerequisites), then restart Krita.
-- **Errors on startup** — open **Tools → Scripts → Python Script Editor**, or
-  launch Krita from a terminal, to see the traceback.
-- **Edits don't appear** — Krita reloads Python plugins only on restart.
+More help: [docs/troubleshooting.md](docs/troubleshooting.md)
