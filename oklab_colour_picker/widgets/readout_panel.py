@@ -165,6 +165,35 @@ class _GradientSlider(QtWidgets.QSlider):
         painter.drawRect(QtCore.QRectF(handle_rect).adjusted(inset, inset, -inset, -inset))
         painter.end()
 
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() != QtCore.Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self.setSliderDown(True)
+        self.setValue(self._value_at_x(event.x()))
+        event.accept()
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if not self.isSliderDown():
+            super().mouseMoveEvent(event)
+            return
+        self.setValue(self._value_at_x(event.x()))
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() != QtCore.Qt.LeftButton or not self.isSliderDown():
+            super().mouseReleaseEvent(event)
+            return
+        self.setValue(self._value_at_x(event.x()))
+        self.setSliderDown(False)
+        event.accept()
+
+    def _value_at_x(self, x: int) -> int:
+        track_rect = self._track_rect()
+        fraction = (x - track_rect.left()) / max(1, track_rect.width() - 1)
+        fraction = float(np.clip(fraction, 0.0, 1.0))
+        return self.minimum() + int(round(fraction * (self.maximum() - self.minimum())))
+
 
 class _AxisRow(QtWidgets.QWidget):
     """One row: label, gradient slider, numeric spinbox."""

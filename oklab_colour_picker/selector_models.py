@@ -117,15 +117,14 @@ class LightnessSliceModel:
         Used during drag to keep the preview continuous when the cursor leaves
         the gamut leaf. ``color_at_position`` returns ``None`` past the leaf;
         this variant instead clamps to the per-(L, hue) sRGB cusp at the same
-        hue so the preview slides along the boundary. Returns ``None`` only
-        when the cursor falls outside the disk circle entirely, so there is no
-        meaningful hue to snap to.
+        hue so the preview slides along the boundary. Cursor positions outside
+        the disk are projected back to the disk rim at the cursor's angle.
         """
-        geometry = _circle_geometry(position, size)
+        geometry = _circle_geometry_projected(position, size)
         if geometry is None:
             return None
 
-        normalized_radius, hue, _, _ = geometry
+        normalized_radius, hue = geometry
         desired_chroma = normalized_radius * LIGHTNESS_CHART_CHROMA_MAX
         max_chroma = float(color_math.max_chroma_for_lh(self.lightness, hue))
         chroma = max(0.0, min(desired_chroma, max_chroma))
@@ -216,6 +215,23 @@ class LightnessChromaSliceModel:
             float((1.0 - lightness) * (height - 1.0)),
         )
 
+    def snapped_color_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> np.ndarray | None:
+        """In-gamut colour nearest the drag cursor on this hue plane."""
+        bounds = _size_bounds(size)
+        if bounds is None:
+            return None
+
+        width, height = bounds
+        x = float(np.clip(float(position[0]), 0.0, width - 1.0))
+        y = float(np.clip(float(position[1]), 0.0, height - 1.0))
+        lightness = 1.0 - y / (height - 1.0)
+        desired_chroma = (x / (width - 1.0)) * LIGHTNESS_CHART_CHROMA_MAX
+        max_chroma = float(color_math.max_chroma_for_lh(lightness, self.hue))
+        chroma = max(0.0, min(desired_chroma, max_chroma))
+        return color_math.oklch_to_oklab([lightness, chroma, self.hue])
+
 
 @dataclass(frozen=True)
 class HueLightnessSliceModel:
@@ -289,6 +305,28 @@ class HueLightnessSliceModel:
 
         return _position_from_circle(1.0 - lightness, hue, (width, height))
 
+    def snapped_color_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> np.ndarray | None:
+        """Nearest in-gamut colour along the cursor's hue spoke."""
+        geometry = _circle_geometry_projected(position, size)
+        if geometry is None:
+            return None
+
+        normalized_radius, hue = geometry
+        desired_lightness = 1.0 - normalized_radius
+        if self.chroma <= color_math.max_chroma_for_lh(desired_lightness, hue) + CHROMA_EPSILON:
+            lightness = desired_lightness
+        else:
+            samples = np.linspace(0.0, 1.0, 257)
+            valid = self.chroma <= color_math.max_chroma_for_lh(samples, hue) + CHROMA_EPSILON
+            valid_indices = np.flatnonzero(valid)
+            if not valid_indices.size:
+                return None
+            candidates = samples[valid_indices]
+            lightness = float(candidates[int(np.argmin(np.abs(candidates - desired_lightness)))])
+        return color_math.oklch_to_oklab([lightness, self.chroma, hue])
+
 
 @dataclass(frozen=True)
 class ChromaLightnessModel:
@@ -350,6 +388,19 @@ class ChromaLightnessModel:
             return None
         return _position_from_circle(1.0, hue, size)
 
+    def snapped_color_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> np.ndarray | None:
+        """Hue at the cursor angle, projected to the selectable ring."""
+        geometry = _circle_geometry_projected(position, size)
+        if geometry is None:
+            return None
+
+        _, hue = geometry
+        if self.chroma > color_math.max_chroma_for_lh(self.lightness, hue) + CHROMA_EPSILON:
+            return None
+        return color_math.oklch_to_oklab([self.lightness, self.chroma, hue])
+
 
 def _circle_geometry(position: Sequence[float], size: Sequence[float]):
     bounds = _position_in_bounds(position, size)
@@ -371,6 +422,29 @@ def _circle_geometry(position: Sequence[float], size: Sequence[float]):
 
     hue = 0.0 if distance <= POSITION_EPSILON else math.atan2(dy, dx) % math.tau
     return min(distance / radius, 1.0), hue, center_x, radius
+
+
+def _circle_geometry_projected(position: Sequence[float], size: Sequence[float]):
+    bounds = _size_bounds(size)
+    if bounds is None:
+        return None
+
+    width, height = bounds
+    radius = (min(width, height) - 1.0) / 2.0
+    if radius <= 0.0:
+        return None
+
+    center_x = (width - 1.0) / 2.0
+    center_y = (height - 1.0) / 2.0
+    x, y = (float(position[0]), float(position[1]))
+    dx = x - center_x
+    dy = center_y - y
+    distance = math.hypot(dx, dy)
+    if distance <= POSITION_EPSILON:
+        return 0.0, 0.0
+
+    hue = math.atan2(dy, dx) % math.tau
+    return min(distance / radius, 1.0), hue
 
 
 def _circle_geometry_arrays(x, y, size: Sequence[float]):
