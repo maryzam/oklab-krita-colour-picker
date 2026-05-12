@@ -221,10 +221,10 @@ class LightnessChromaSliceModel:
 class HueLightnessSliceModel:
     """Hue/lightness selector at a fixed OKLCh chroma.
 
-    Hue is the polar angle and OKLab lightness is the radius, so the centre is
-    black (L=0) and the rim is white-lightness (L=1). Pixels whose fixed chroma
-    exceeds the per-(L, hue) sRGB gamut leaf are not selectable. In normal dock
-    use this model is rebuilt from the selected colour's chroma, so
+    Hue is the polar angle and OKLab lightness is inverse radius, so the centre
+    is white-lightness (L=1) and the rim is black (L=0). Pixels whose fixed
+    chroma exceeds the per-(L, hue) sRGB gamut leaf are not selectable. In
+    normal dock use this model is rebuilt from the selected colour's chroma, so
     ``position_for_color`` is expected to receive colours on this fixed-chroma
     slice.
     """
@@ -239,7 +239,8 @@ class HueLightnessSliceModel:
         if geometry is None:
             return None
 
-        lightness, hue, _, _ = geometry
+        normalized_radius, hue, _, _ = geometry
+        lightness = 1.0 - normalized_radius
         max_chroma = color_math.max_chroma_for_lh(lightness, hue)
         if self.chroma > max_chroma + CHROMA_EPSILON:
             return None
@@ -255,7 +256,8 @@ class HueLightnessSliceModel:
         if geometry is None:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
 
-        lightness, hue, circle_valid = geometry
+        normalized_radius, hue, circle_valid = geometry
+        lightness = 1.0 - normalized_radius
         max_chroma = color_math.max_chroma_for_lh(lightness, hue)
         valid = circle_valid & (self.chroma <= max_chroma + CHROMA_EPSILON)
         oklch = np.stack(
@@ -285,7 +287,7 @@ class HueLightnessSliceModel:
         if self.chroma > color_math.max_chroma_for_lh(lightness, hue) + CHROMA_EPSILON:
             return None
 
-        return _position_from_circle(lightness, hue, (width, height))
+        return _position_from_circle(1.0 - lightness, hue, (width, height))
 
 
 @dataclass(frozen=True)
