@@ -10,8 +10,19 @@ import numpy as np
 from PyQt5 import QtWidgets
 
 from oklab_colour_picker import color_math
-from oklab_colour_picker.selector_models import ChromaLightnessModel, HueLightnessModel, LightnessSliceModel
-from oklab_colour_picker.widgets import HueRingTabWidget, LightnessSliceDiskWidget, ReadoutPanel, SelectorWidget
+from oklab_colour_picker.selector_models import (
+    ChromaLightnessModel,
+    HueLightnessSliceModel,
+    LightnessChromaSliceModel,
+    LightnessSliceModel,
+)
+from oklab_colour_picker.widgets import (
+    HueLightnessSliceDiskWidget,
+    HueRingTabWidget,
+    LightnessSliceDiskWidget,
+    ReadoutPanel,
+    SelectorWidget,
+)
 
 
 ForegroundListener = Callable[[Sequence[float]], None]
@@ -40,19 +51,22 @@ class DockController(Protocol):
 
 class SelectorMode(str, Enum):
     LIGHTNESS_SLICE = "lightness_slice"
-    HUE_LIGHTNESS = "hue_lightness"
+    HUE_LIGHTNESS_SLICE = "hue_lightness_slice"
+    LIGHTNESS_CHROMA_SLICE = "lightness_chroma_slice"
     CHROMA_LIGHTNESS = "chroma_lightness"
 
 
 MODE_LABELS = {
     SelectorMode.LIGHTNESS_SLICE: "Hue/Chroma",
-    SelectorMode.HUE_LIGHTNESS: "Lightness",
+    SelectorMode.HUE_LIGHTNESS_SLICE: "Hue/Lightness",
+    SelectorMode.LIGHTNESS_CHROMA_SLICE: "Lightness/Chroma",
     SelectorMode.CHROMA_LIGHTNESS: "Hue Ring",
 }
 
 MODE_OBJECT_NAMES = {
     SelectorMode.LIGHTNESS_SLICE: "lightness-slice-selector",
-    SelectorMode.HUE_LIGHTNESS: "hue-lightness-selector",
+    SelectorMode.HUE_LIGHTNESS_SLICE: "hue-lightness-slice-selector",
+    SelectorMode.LIGHTNESS_CHROMA_SLICE: "lightness-chroma-slice-selector",
     SelectorMode.CHROMA_LIGHTNESS: "chroma-lightness-selector",
 }
 
@@ -190,6 +204,8 @@ def _build_selector_widget(
 ) -> SelectorWidget | HueRingTabWidget:
     if mode == SelectorMode.CHROMA_LIGHTNESS:
         return HueRingTabWidget(model, parent)
+    if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
+        return HueLightnessSliceDiskWidget(model, parent)
     if mode == SelectorMode.LIGHTNESS_SLICE:
         return LightnessSliceDiskWidget(model, parent)
     return SelectorWidget(model, parent)
@@ -200,7 +216,8 @@ def _models_for_colour(oklab: Sequence[float]) -> dict[SelectorMode, object]:
     hue = float(hue % math.tau)
     return {
         SelectorMode.LIGHTNESS_SLICE: LightnessSliceModel(lightness=float(np.clip(lightness, 0.0, 1.0))),
-        SelectorMode.HUE_LIGHTNESS: HueLightnessModel(hue=hue),
+        SelectorMode.HUE_LIGHTNESS_SLICE: HueLightnessSliceModel(chroma=max(0.0, float(chroma))),
+        SelectorMode.LIGHTNESS_CHROMA_SLICE: LightnessChromaSliceModel(hue=hue),
         SelectorMode.CHROMA_LIGHTNESS: ChromaLightnessModel(
             lightness=float(np.clip(lightness, 0.0, 1.0)),
             chroma=max(0.0, float(chroma)),

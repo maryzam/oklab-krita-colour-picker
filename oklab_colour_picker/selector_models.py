@@ -133,8 +133,8 @@ class LightnessSliceModel:
 
 
 @dataclass(frozen=True)
-class HueLightnessModel:
-    """Chroma/lightness selector at a fixed OKLab hue.
+class LightnessChromaSliceModel:
+    """Lightness/chroma selector at a fixed OKLab hue.
 
     The x axis spans absolute OKLCh chroma in ``[0, LIGHTNESS_CHART_CHROMA_MAX]``,
     so the selectable region traces the per-hue sRGB gamut leaf rather than
@@ -215,6 +215,77 @@ class HueLightnessModel:
             float(chroma_fraction * (width - 1.0)),
             float((1.0 - lightness) * (height - 1.0)),
         )
+
+
+@dataclass(frozen=True)
+class HueLightnessSliceModel:
+    """Hue/lightness selector at a fixed OKLCh chroma.
+
+    Hue is the polar angle and OKLab lightness is the radius, so the centre is
+    black (L=0) and the rim is white-lightness (L=1). Pixels whose fixed chroma
+    exceeds the per-(L, hue) sRGB gamut leaf are not selectable. In normal dock
+    use this model is rebuilt from the selected colour's chroma, so
+    ``position_for_color`` is expected to receive colours on this fixed-chroma
+    slice.
+    """
+
+    chroma: float
+
+    def __post_init__(self) -> None:
+        _validate_chroma(self.chroma)
+
+    def color_at_position(self, position: Sequence[float], size: Sequence[float]) -> np.ndarray | None:
+        geometry = _circle_geometry(position, size)
+        if geometry is None:
+            return None
+
+        lightness, hue, _, _ = geometry
+        max_chroma = color_math.max_chroma_for_lh(lightness, hue)
+        if self.chroma > max_chroma + CHROMA_EPSILON:
+            return None
+        return color_math.oklch_to_oklab([lightness, self.chroma, hue])
+
+    def colors_at_positions(
+        self,
+        x: npt.ArrayLike,
+        y: npt.ArrayLike,
+        size: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        geometry = _circle_geometry_arrays(x, y, size)
+        if geometry is None:
+            return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
+
+        lightness, hue, circle_valid = geometry
+        max_chroma = color_math.max_chroma_for_lh(lightness, hue)
+        valid = circle_valid & (self.chroma <= max_chroma + CHROMA_EPSILON)
+        oklch = np.stack(
+            (
+                lightness,
+                np.full_like(lightness, self.chroma, dtype=float),
+                hue,
+            ),
+            axis=-1,
+        )
+        return color_math.oklch_to_oklab(oklch), valid
+
+    def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
+        bounds = _size_bounds(size)
+        if bounds is None:
+            return None
+
+        width, height = bounds
+        lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
+        if not -LIGHTNESS_EPSILON <= lightness <= 1.0 + LIGHTNESS_EPSILON:
+            return None
+        if abs(chroma - self.chroma) > CHROMA_EPSILON:
+            return None
+
+        lightness = float(np.clip(lightness, 0.0, 1.0))
+        hue = float(hue % math.tau)
+        if self.chroma > color_math.max_chroma_for_lh(lightness, hue) + CHROMA_EPSILON:
+            return None
+
+        return _position_from_circle(lightness, hue, (width, height))
 
 
 @dataclass(frozen=True)

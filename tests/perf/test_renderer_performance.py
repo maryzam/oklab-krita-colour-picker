@@ -7,7 +7,8 @@ from oklab_colour_picker import color_math
 from oklab_colour_picker.renderers import render_rgba
 from oklab_colour_picker.selector_models import (
     ChromaLightnessModel,
-    HueLightnessModel,
+    LightnessChromaSliceModel,
+    HueLightnessSliceModel,
     LightnessSliceModel,
 )
 
@@ -21,7 +22,8 @@ def test_256_renderers_meet_median_budget():
     chroma = color_math.max_chroma_for_lh(0.55, 0.0) * 0.35
     cases = [
         LightnessSliceModel(lightness=0.55),
-        HueLightnessModel(hue=1.25),
+        HueLightnessSliceModel(chroma=0.05),
+        LightnessChromaSliceModel(hue=1.25),
         ChromaLightnessModel(lightness=0.55, chroma=chroma),
     ]
 

@@ -13,6 +13,7 @@ import oklab_colour_picker
 from oklab_colour_picker import color_math
 from oklab_colour_picker.dock import ColourPickerDockPanel, SelectorMode, connect_dock_visibility
 from oklab_colour_picker.plugin import DOCK_FACTORY_ID, DOCK_TITLE, create_dock_widget_class, register_plugin
+from oklab_colour_picker.widgets import HueLightnessSliceDiskWidget
 import oklab_colour_picker.plugin as plugin_module
 
 
@@ -23,22 +24,28 @@ def test_dock_panel_constructs_all_selector_views_and_switches_modes(qtbot):
 
     assert [widget.objectName() for widget in panel.selector_widgets] == [
         "lightness-slice-selector",
-        "hue-lightness-selector",
+        "hue-lightness-slice-selector",
+        "lightness-chroma-slice-selector",
         "chroma-lightness-selector",
     ]
     assert panel.mode == SelectorMode.LIGHTNESS_SLICE
 
-    panel.set_mode(SelectorMode.HUE_LIGHTNESS)
+    assert isinstance(
+        panel.selector_for_mode(SelectorMode.HUE_LIGHTNESS_SLICE),
+        HueLightnessSliceDiskWidget,
+    )
 
-    assert panel.mode == SelectorMode.HUE_LIGHTNESS
-    assert panel.active_selector is panel.selector_for_mode(SelectorMode.HUE_LIGHTNESS)
+    panel.set_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
+
+    assert panel.mode == SelectorMode.LIGHTNESS_CHROMA_SLICE
+    assert panel.active_selector is panel.selector_for_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
 
 
 def test_selector_signals_update_controller_and_sibling_indicators(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
     qtbot.addWidget(panel)
-    panel.set_mode(SelectorMode.HUE_LIGHTNESS)
+    panel.set_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
     active = panel.active_selector
     active.resize(120, 80)
 
@@ -57,7 +64,7 @@ def test_preview_reuses_equal_selector_models(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
     qtbot.addWidget(panel)
-    panel.set_mode(SelectorMode.HUE_LIGHTNESS)
+    panel.set_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
     active = panel.active_selector
     active.resize(120, 80)
 
@@ -90,7 +97,7 @@ def test_indicator_maps_to_same_colour_after_resize(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
     qtbot.addWidget(panel)
-    panel.set_mode(SelectorMode.HUE_LIGHTNESS)
+    panel.set_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
     widget = panel.active_selector
     widget.resize(80, 40)
     colour = widget.model.color_at_position((30, 12), (80, 40))
