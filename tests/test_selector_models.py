@@ -140,6 +140,28 @@ def test_lightness_chart_chroma_max_envelopes_srgb_cusp():
     assert color_math.SRGB_MAX_CHROMA >= float(np.max(chroma_cusp))
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        LightnessSliceModel(lightness=0.55),
+        HueLightnessSliceModel(chroma=0.05),
+        LightnessChromaSliceModel(hue=1.25),
+        ChromaLightnessModel(lightness=0.55, chroma=0.05),
+    ],
+)
+def test_vectorized_selector_render_paths_do_not_use_halley_boundary_solver(monkeypatch, model):
+    def fail_on_boundary_solver(*_args, **_kwargs):
+        raise AssertionError("colors_at_positions must not call max_chroma_for_lh")
+
+    monkeypatch.setattr(color_math, "max_chroma_for_lh", fail_on_boundary_solver)
+    y, x = np.indices((32, 32), dtype=float)
+
+    oklab, valid = model.colors_at_positions(x, y, (32, 32))
+
+    assert oklab.shape == (32, 32, 3)
+    assert valid.shape == (32, 32)
+
+
 def test_lightness_chroma_slice_maps_x_to_absolute_chroma():
     model = LightnessChromaSliceModel(hue=1.25)
 
