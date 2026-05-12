@@ -101,6 +101,49 @@ def test_external_foreground_sync_updates_selected_colour_once():
     np.testing.assert_allclose(observed[0], external)
 
 
+def test_visible_controller_reads_foreground_during_initial_startup():
+    adapter = FakeKritaAdapter()
+    external = np.array([0.4, -0.03, 0.07])
+    adapter.foreground_colour = external
+
+    controller = ColourPickerController(adapter, scheduler=FakeScheduler())
+
+    np.testing.assert_allclose(controller.selected_colour, external)
+
+
+def test_showing_hidden_controller_syncs_foreground_immediately():
+    adapter = FakeKritaAdapter()
+    timer = FakeRepeatingTimer()
+    controller = ColourPickerController(
+        adapter,
+        scheduler=FakeScheduler(),
+        foreground_timer=timer,
+        initially_visible=False,
+    )
+    external = np.array([0.48, 0.02, 0.01])
+    adapter.foreground_colour = external
+
+    controller.set_dock_visible(True)
+
+    np.testing.assert_allclose(controller.selected_colour, external)
+    assert timer.started_intervals == [250]
+
+
+def test_showing_hidden_controller_without_timer_still_syncs_foreground():
+    adapter = FakeKritaAdapter()
+    controller = ColourPickerController(
+        adapter,
+        scheduler=FakeScheduler(),
+        initially_visible=False,
+    )
+    external = np.array([0.38, -0.02, 0.06])
+    adapter.foreground_colour = external
+
+    controller.set_dock_visible(True)
+
+    np.testing.assert_allclose(controller.selected_colour, external)
+
+
 def test_commit_echo_is_suppressed_by_token_and_normalized_colour_match():
     scheduler = FakeScheduler()
     adapter = FakeKritaAdapter()
