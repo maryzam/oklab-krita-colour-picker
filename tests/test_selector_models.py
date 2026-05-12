@@ -112,9 +112,12 @@ def test_lightness_slice_snap_returns_in_gamut_position_unchanged():
 
 
 @pytest.mark.parametrize("position", [(-1.0, 50.0), (50.0, 101.0), (0.0, 0.0)])
-def test_lightness_slice_snap_returns_none_outside_disk(position):
+def test_lightness_slice_snap_projects_outside_positions_to_disk(position):
     model = LightnessSliceModel(lightness=0.5)
-    assert model.snapped_color_at_position(position, (101.0, 101.0)) is None
+    snapped = model.snapped_color_at_position(position, (101.0, 101.0))
+
+    assert snapped is not None
+    assert model.position_for_color(snapped, (101.0, 101.0)) is not None
 
 
 @pytest.mark.parametrize("position", [(60.0, 45.0), (40.0, 50.0), (50.0, 60.0)])
@@ -154,6 +157,26 @@ def test_lightness_chroma_slice_rejects_position_outside_per_hue_gamut():
     # Hue 0 (red) cusp chroma is well below LIGHTNESS_CHART_CHROMA_MAX, so the right
     # edge at mid-lightness lies outside the achievable per-hue gamut.
     assert model.color_at_position((100.0, 50.0), (101.0, 101.0)) is None
+
+
+def test_lightness_chroma_slice_snap_clamps_to_gamut_leaf():
+    model = LightnessChromaSliceModel(hue=0.0)
+    snapped = model.snapped_color_at_position((100.0, 50.0), (101.0, 101.0))
+
+    assert snapped is not None
+    lightness, chroma, hue = color_math.oklab_to_oklch(snapped)
+    np.testing.assert_allclose(lightness, 0.5, atol=1e-12)
+    np.testing.assert_allclose(hue, 0.0, atol=1e-12)
+    np.testing.assert_allclose(chroma, color_math.max_chroma_for_lh(0.5, 0.0), atol=1e-9)
+
+
+def test_lightness_chroma_slice_snap_projects_outside_rect_to_edge():
+    model = LightnessChromaSliceModel(hue=1.0)
+    snapped = model.snapped_color_at_position((-20.0, 50.0), (101.0, 101.0))
+
+    expected = model.color_at_position((0.0, 50.0), (101.0, 101.0))
+    assert expected is not None
+    np.testing.assert_allclose(snapped, expected, atol=1e-12)
 
 
 @pytest.mark.parametrize("hue", [math.nan, math.inf, -math.inf])
@@ -259,6 +282,23 @@ def test_hue_lightness_slice_rejects_position_outside_per_lightness_hue_gamut():
     assert model.color_at_position((50.0, 50.0), (101.0, 101.0)) is None
 
 
+def test_hue_lightness_slice_snap_finds_nearest_valid_lightness_on_spoke():
+    model = HueLightnessSliceModel(chroma=0.2)
+    snapped = model.snapped_color_at_position((50.0, 50.0), (101.0, 101.0))
+
+    assert snapped is not None
+    assert model.position_for_color(snapped, (101.0, 101.0)) is not None
+
+
+def test_hue_lightness_slice_snap_projects_outside_circle_to_rim_angle():
+    model = HueLightnessSliceModel(chroma=0.0)
+    snapped = model.snapped_color_at_position((150.0, 50.0), (101.0, 101.0))
+
+    expected = model.color_at_position((100.0, 50.0), (101.0, 101.0))
+    assert expected is not None
+    np.testing.assert_allclose(snapped, expected, atol=1e-12)
+
+
 def test_hue_lightness_slice_accepts_achromatic_full_lightness_range():
     model = HueLightnessSliceModel(chroma=0.0)
 
@@ -333,6 +373,32 @@ def test_chroma_lightness_rejects_interior_positions_to_preserve_inverse_symmetr
     # Pixel sits ~10 px from the centre of a 101x101 widget — well inside the
     # donut hole (outer radius 50, band width 25 → inner edge at 25 px).
     assert model.color_at_position((60.0, 50.0), (101.0, 101.0)) is None
+
+
+def test_chroma_lightness_snap_projects_interior_to_ring_hue():
+    chroma = color_math.max_chroma_for_lh(0.55, 0.0) * 0.35
+    model = ChromaLightnessModel(lightness=0.55, chroma=chroma)
+    snapped = model.snapped_color_at_position((60.0, 50.0), (101.0, 101.0))
+
+    expected = model.color_at_position((100.0, 50.0), (101.0, 101.0))
+    assert expected is not None
+    np.testing.assert_allclose(snapped, expected, atol=1e-12)
+
+
+def test_chroma_lightness_snap_projects_to_nearest_valid_hue_when_ring_has_gap():
+    model = ChromaLightnessModel(lightness=0.5, chroma=0.2)
+    assert model.color_at_position((50.0, 0.0), (101.0, 101.0)) is None
+
+    snapped = model.snapped_color_at_position((50.0, 0.0), (101.0, 101.0))
+
+    assert snapped is not None
+    assert model.position_for_color(snapped, (101.0, 101.0)) is not None
+    lightness, chroma, hue = color_math.oklab_to_oklch(snapped)
+    np.testing.assert_allclose(
+        color_math.max_chroma_for_lh(lightness, hue),
+        chroma,
+        atol=1e-5,
+    )
 
 
 def test_chroma_lightness_rejects_inverse_color_with_mismatched_chroma():

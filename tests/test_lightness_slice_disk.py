@@ -240,14 +240,21 @@ def test_drag_resumes_snapping_after_cursor_re_enters(qtbot):
 
     start = QtCore.QPoint(55, 50)
     rim = QtCore.QPoint(99, 50)
+    commits = []
+    widget.committed.connect(commits.append)
 
     _send_mouse(widget, QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
     _send_mouse(widget, QtCore.QEvent.MouseMove, rim, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
     # Simulate the cursor leaving the widget mid-drag.
     QtCore.QCoreApplication.sendEvent(widget, QtCore.QEvent(QtCore.QEvent.Leave))
-    # Subsequent move while the button is still held should keep snap
-    # active — _drag_in_progress must still be set.
-    assert widget._drag_in_progress is True
+    _send_mouse(widget, QtCore.QEvent.MouseMove, rim, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, rim, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    assert len(commits) == 1
+    lightness, chroma, hue = (float(v) for v in color_math.oklab_to_oklch(commits[0]))
+    np.testing.assert_allclose(lightness, 0.5, atol=1e-9)
+    np.testing.assert_allclose(hue % math.tau, 0.0, atol=1e-6)
+    np.testing.assert_allclose(chroma, color_math.max_chroma_for_lh(0.5, 0.0), atol=1e-9)
 
 
 def _send_mouse(widget, event_type, pos, button, buttons):

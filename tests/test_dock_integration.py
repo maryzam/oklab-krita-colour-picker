@@ -41,6 +41,17 @@ def test_dock_panel_constructs_all_selector_views_and_switches_modes(qtbot):
     assert panel.active_selector is panel.selector_for_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
 
 
+def test_dock_panel_uses_current_foreground_on_construction(qtbot):
+    colour = color_math.oklch_to_oklab([0.58, 0.07, math.pi / 3.0])
+    controller = FakeController(selected_colour=colour)
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+
+    for widget in panel.selector_widgets:
+        np.testing.assert_allclose(widget.selected_colour, colour)
+    np.testing.assert_allclose(panel._readout_panel._current_oklab, colour)
+
+
 def test_selector_signals_update_controller_and_sibling_indicators(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
@@ -216,6 +227,18 @@ def test_created_krita_dock_builds_panel_and_wires_visibility(qtbot):
     assert controller.visibility == [False]
 
 
+def test_created_krita_dock_syncs_foreground_on_canvas_change(qtbot):
+    controller = FakeController()
+    dock_class = create_dock_widget_class(FakeDockWidget, controller_factory=lambda: controller)
+    dock = dock_class()
+    qtbot.addWidget(dock)
+    sync_count = controller.sync_count
+
+    dock.canvasChanged(object())
+
+    assert controller.sync_count == sync_count + 1
+
+
 def test_dock_shows_friendly_message_when_numpy_is_missing(qtbot, monkeypatch):
     import types
 
@@ -363,15 +386,17 @@ def test_package_exports_register_plugin():
 
 
 class FakeController:
-    def __init__(self):
+    def __init__(self, selected_colour=None):
         self.previews = []
         self.commits = []
         self.visibility = []
         self._foreground_listeners = []
+        self._selected_colour = None if selected_colour is None else np.asarray(selected_colour, dtype=float).copy()
+        self.sync_count = 0
 
     @property
     def selected_colour(self):
-        return None
+        return None if self._selected_colour is None else self._selected_colour.copy()
 
     def set_preview_colour(self, colour):
         self.previews.append(None if colour is None else np.asarray(colour, dtype=float).copy())
@@ -381,6 +406,10 @@ class FakeController:
 
     def set_dock_visible(self, visible):
         self.visibility.append(bool(visible))
+
+    def sync_external_foreground(self):
+        self.sync_count += 1
+        return False
 
     def add_foreground_listener(self, listener):
         self._foreground_listeners.append(listener)

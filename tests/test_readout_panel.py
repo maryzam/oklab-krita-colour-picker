@@ -8,6 +8,8 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PyQt5")
 
+from PyQt5 import QtCore, QtGui, QtWidgets
+
 from oklab_colour_picker import color_math, renderers
 from oklab_colour_picker.widgets.readout_panel import (
     ReadoutPanel,
@@ -116,6 +118,63 @@ def test_readout_panel_round_trips_through_sliders(qtbot):
     assert panel._row_l.value() == pytest.approx(0.62, abs=1e-3)
     assert panel._row_c.value() == pytest.approx(0.11, abs=1e-3)
     assert panel._row_h.value() == pytest.approx(245.0, abs=0.5)
+
+
+def test_readout_slider_click_jumps_to_clicked_position(qtbot):
+    panel = ReadoutPanel()
+    panel.resize(320, 200)
+    qtbot.addWidget(panel)
+    panel.show()
+    qtbot.waitExposed(panel)
+
+    panel.set_current_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]))
+    commits: list[np.ndarray] = []
+    previews: list[np.ndarray] = []
+    panel.previewed.connect(lambda colour: previews.append(np.asarray(colour, dtype=float)))
+    panel.committed.connect(lambda colour: commits.append(np.asarray(colour, dtype=float)))
+
+    slider = panel._row_l.slider
+    track = slider._track_rect()
+    target_x = track.left() + int(round(track.width() * 0.75))
+    target = QtCore.QPoint(target_x, track.center().y())
+    _send_mouse(slider, QtCore.QEvent.MouseButtonPress, target)
+    _send_mouse(slider, QtCore.QEvent.MouseButtonRelease, target)
+
+    assert previews
+    assert commits
+    lightness, _, _ = color_math.oklab_to_oklch(commits[-1])
+    assert lightness == pytest.approx(0.75, abs=0.02)
+
+
+def test_readout_slider_drag_previews_and_commits_release_position(qtbot):
+    panel = ReadoutPanel()
+    panel.resize(320, 200)
+    qtbot.addWidget(panel)
+    panel.show()
+    qtbot.waitExposed(panel)
+
+    panel.set_current_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]))
+    commits: list[np.ndarray] = []
+    previews: list[np.ndarray] = []
+    panel.previewed.connect(lambda colour: previews.append(np.asarray(colour, dtype=float)))
+    panel.committed.connect(lambda colour: commits.append(np.asarray(colour, dtype=float)))
+
+    slider = panel._row_l.slider
+    track = slider._track_rect()
+    start = QtCore.QPoint(track.left() + int(round(track.width() * 0.25)), track.center().y())
+    middle = QtCore.QPoint(track.left() + int(round(track.width() * 0.50)), track.center().y())
+    end = QtCore.QPoint(track.left() + int(round(track.width() * 0.75)), track.center().y())
+
+    _send_mouse(slider, QtCore.QEvent.MouseButtonPress, start)
+    _send_mouse(slider, QtCore.QEvent.MouseMove, middle)
+    _send_mouse(slider, QtCore.QEvent.MouseButtonRelease, end)
+
+    assert len(previews) >= 2
+    assert len(commits) == 1
+    preview_lightness = [float(color_math.oklab_to_oklch(colour)[0]) for colour in previews]
+    assert any(value == pytest.approx(0.50, abs=0.02) for value in preview_lightness)
+    committed_lightness, _, _ = color_math.oklab_to_oklch(commits[0])
+    assert committed_lightness == pytest.approx(0.75, abs=0.02)
 
 
 def test_readout_panel_hex_field_reflects_current_colour(qtbot):
@@ -304,3 +363,17 @@ def test_readout_panel_out_of_gamut_warning_visibility(qtbot):
         color_math.oklch_to_oklab([0.6, color_math.SRGB_MAX_CHROMA, 0.0])
     )
     assert panel._swatch._oog_visible
+
+
+def _send_mouse(widget, event_type, position):
+    button = QtCore.Qt.LeftButton if event_type != QtCore.QEvent.MouseMove else QtCore.Qt.NoButton
+    buttons = QtCore.Qt.NoButton if event_type == QtCore.QEvent.MouseButtonRelease else QtCore.Qt.LeftButton
+    event = QtGui.QMouseEvent(
+        event_type,
+        QtCore.QPointF(position),
+        button,
+        buttons,
+        QtCore.Qt.NoModifier,
+    )
+    QtWidgets.QApplication.sendEvent(widget, event)
+    assert event.isAccepted()

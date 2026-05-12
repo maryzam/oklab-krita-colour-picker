@@ -13,8 +13,8 @@ The overlays are presentation-only — they don't affect picking. The contour
 path is cached per (lightness, width, height) since rebuilding it requires
 the Halley-iterated gamut math at each sampled hue.
 
-Drag picks also snap to the gamut leaf: when the cursor leaves the leaf
-during a drag, ``LightnessSliceModel.snapped_color_at_position`` clamps to
+Drag picks also snap to the gamut leaf or disk rim: when the cursor leaves the
+leaf during a drag, ``LightnessSliceModel.snapped_color_at_position`` clamps to
 the nearest in-gamut chroma at the cursor's hue so the preview stays
 continuous along the boundary.
 """
@@ -45,27 +45,6 @@ class LightnessSliceDiskWidget(SelectorWidget):
         super().__init__(model, parent)
         self._gamut_path_cache_key: tuple[float, int, int] | None = None
         self._gamut_path_cache: QtGui.QPainterPath | None = None
-        # Snap is *drag-only*: a plain click on an out-of-gamut pixel must
-        # still cancel via the base widget's strict in-gamut path,
-        # otherwise tapping anywhere inside the disk would commit the cusp
-        # at that hue. The flag flips on the first ``mouseMoveEvent`` that
-        # arrives while a left-button press is active — proving the user is
-        # actually dragging — and stays set through the release handler
-        # (where SelectorWidget has already cleared its own ``_pressed``
-        # flag before the release-time ``_colour_at`` lookup).
-        self._drag_in_progress = False
-
-    def mouseMoveEvent(self, event):  # type: ignore[override]
-        if event.buttons() & QtCore.Qt.LeftButton:
-            self._drag_in_progress = True
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):  # type: ignore[override]
-        try:
-            super().mouseReleaseEvent(event)
-        finally:
-            if event.button() == QtCore.Qt.LeftButton:
-                self._drag_in_progress = False
 
     def set_model(self, model) -> None:  # type: ignore[override]
         super().set_model(model)
@@ -75,19 +54,14 @@ class LightnessSliceDiskWidget(SelectorWidget):
         super().resizeEvent(event)
         self._invalidate_gamut_path()
 
-    def _colour_at(self, point):
-        # During a drag, snap out-of-gamut cursor positions to the nearest
-        # in-gamut chroma at the same hue so the preview stays continuous
-        # across the leaf boundary. Outside a drag (hover, keyboard nav) we
-        # leave behaviour to the parent's strict in-gamut picking, so a key
-        # repeat past the leaf still bounces back to the last valid pixel.
-        if self._drag_in_progress and isinstance(self._model, LightnessSliceModel):
+    def _snapped_colour_at(self, point):
+        if isinstance(self._model, LightnessSliceModel):
             snapped = self._model.snapped_color_at_position(
                 (point.x(), point.y()), (self.width(), self.height())
             )
             if snapped is not None:
                 return snapped
-        return super()._colour_at(point)
+        return super()._snapped_colour_at(point)
 
     def _paint_indicator(self, painter: QtGui.QPainter) -> None:
         # Drawing overlays here (instead of overriding paintEvent) keeps the

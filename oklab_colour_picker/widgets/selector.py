@@ -108,8 +108,8 @@ class SelectorWidget(QtWidgets.QWidget):
         if event.button() != QtCore.Qt.LeftButton or not self._pressed:
             event.ignore()
             return
+        colour = self._drag_colour_at(event.pos())
         self._pressed = False
-        colour = self._colour_at(event.pos())
         if colour is not None:
             self._selected_colour = colour.copy()
             self.update()
@@ -163,7 +163,7 @@ class SelectorWidget(QtWidgets.QWidget):
         event.accept()
 
     def _preview_at(self, point: QtCore.QPoint) -> None:
-        colour = self._colour_at(point)
+        colour = self._drag_colour_at(point) if self._pressed else self._colour_at(point)
         if colour is not None:
             self._selected_colour = colour.copy()
             if self._pressed:
@@ -172,9 +172,8 @@ class SelectorWidget(QtWidgets.QWidget):
             self.previewed.emit(colour.copy())
             return
 
-        # Once a drag has visited a valid colour, invalid movement keeps the
-        # preview pinned there and emits nothing until the next valid point or
-        # release. Downstream listeners keep showing the last usable colour.
+        # If a drag began on an invalid point and has not yet reached any
+        # selectable colour, keep cancellation semantics until it does.
         if self._pressed and self._last_valid_drag_colour is not None:
             return
 
@@ -184,6 +183,20 @@ class SelectorWidget(QtWidgets.QWidget):
 
     def _colour_at(self, point: QtCore.QPoint) -> np.ndarray | None:
         return self._model.color_at_position((point.x(), point.y()), _widget_size(self))
+
+    def _drag_colour_at(self, point: QtCore.QPoint) -> np.ndarray | None:
+        colour = self._colour_at(point)
+        if colour is not None:
+            return colour
+        if self._last_valid_drag_colour is None:
+            return None
+        return self._snapped_colour_at(point)
+
+    def _snapped_colour_at(self, point: QtCore.QPoint) -> np.ndarray | None:
+        snapper = getattr(self._model, "snapped_color_at_position", None)
+        if not callable(snapper):
+            return None
+        return snapper((point.x(), point.y()), _widget_size(self))
 
     def _keyboard_target_position(
         self,
@@ -292,10 +305,6 @@ def _as_oklab(oklab: Sequence[float] | None) -> np.ndarray | None:
     if colour.shape != (3,):
         raise ValueError("OKLab colour must contain exactly three components")
     return colour.copy()
-
-
-def _clamp_round(value: float, lower: int, upper: int) -> int:
-    return max(lower, min(upper, round(value)))
 
 
 def _keyboard_step(size: QtCore.QSize, modifiers: QtCore.Qt.KeyboardModifiers) -> int:

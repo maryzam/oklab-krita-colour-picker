@@ -116,15 +116,7 @@ class HueRingTabWidget(QtWidgets.QWidget):
     def _end_hue_drag(self, release_pos: QtCore.QPoint) -> None:
         # A valid release may arrive without a separate move event at that
         # position, so capture it before the drag cache is cleared.
-        width, height = self._ring.width(), self._ring.height()
-        valid = (
-            width > 1
-            and height > 1
-            and self._ring.model.color_at_position(
-                (release_pos.x(), release_pos.y()), (width, height)
-            ) is not None
-        )
-        if valid:
+        if self._ring_drag_position_selectable(release_pos):
             self._capture_hue_from_ring_position(release_pos)
         self._ring_drag_active = False
         self._last_valid_drag_hue = None
@@ -133,11 +125,7 @@ class HueRingTabWidget(QtWidgets.QWidget):
         width, height = self._ring.width(), self._ring.height()
         if width <= 1 or height <= 1:
             return
-        # Only honour positions that fall on the donut band: the ring model's
-        # ``color_at_position`` returns None for the centre, the corners, and
-        # any out-of-gamut hue at the current (L, C). That keeps stray
-        # off-band positions from rotating the saved hue.
-        if self._ring.model.color_at_position((pos.x(), pos.y()), (width, height)) is None:
+        if not self._ring_drag_position_selectable(pos):
             return
         center_x = (width - 1) / 2.0
         center_y = (height - 1) / 2.0
@@ -149,6 +137,19 @@ class HueRingTabWidget(QtWidgets.QWidget):
         self._chosen_hue = hue
         if self._ring_drag_active:
             self._last_valid_drag_hue = hue
+
+    def _ring_drag_position_selectable(self, pos: QtCore.QPoint) -> bool:
+        width, height = self._ring.width(), self._ring.height()
+        if width <= 1 or height <= 1:
+            return False
+        position = (pos.x(), pos.y())
+        size = (width, height)
+        if self._ring.model.color_at_position(position, size) is not None:
+            return True
+        if not self._ring_drag_active or self._last_valid_drag_hue is None:
+            return False
+        snapper = getattr(self._ring.model, "snapped_color_at_position", None)
+        return callable(snapper) and snapper(position, size) is not None
 
     def _on_ring_previewed(self, oklab: object) -> None:
         self._capture_hue_if_chromatic(oklab)
