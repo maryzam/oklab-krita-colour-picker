@@ -66,6 +66,7 @@ class ColourPickerController:
         self._commit_token = 0
         self._last_committed_token: int | None = None
         self._last_committed_colour: np.ndarray | None = None
+        self._ignore_next_external_sync = False
         self._dock_visible = bool(initially_visible)
 
         if self._dock_visible:
@@ -100,6 +101,7 @@ class ColourPickerController:
         """Set transient UI preview state without replacing any pending commit."""
 
         self._selected_colour = None if oklab is None else _as_oklab(oklab)
+        self._ignore_next_external_sync = oklab is not None
 
     def request_foreground_commit(self, oklab: Sequence[float] | None) -> None:
         if oklab is None:
@@ -110,6 +112,7 @@ class ColourPickerController:
             self._selection_before_pending_commit = None if self._selected_colour is None else self._selected_colour.copy()
         self._selected_colour = colour
         self._pending_commit = colour
+        self._ignore_next_external_sync = True
         if self._commit_scheduled:
             return
 
@@ -119,6 +122,9 @@ class ColourPickerController:
     def sync_external_foreground(self) -> bool:
         if not self._dock_visible:
             return False
+        if self._pending_commit is None and not self._commit_scheduled and self._ignore_next_external_sync:
+            self._ignore_next_external_sync = False
+            return False
 
         foreground = self._adapter.get_foreground()
         if foreground is None:
@@ -126,6 +132,13 @@ class ColourPickerController:
 
         colour = _as_oklab(foreground)
         normalized = normalize_oklab_for_krita(colour)
+        if self._pending_commit is not None or self._commit_scheduled:
+            before_pending = self._selection_before_pending_commit
+            before_normalized = (
+                None if before_pending is None else normalize_oklab_for_krita(before_pending)
+            )
+            if before_normalized is not None and _quantized_equal(before_normalized, normalized):
+                return False
         if self._is_self_feedback(normalized):
             return False
         selected_normalized = None if self._selected_colour is None else normalize_oklab_for_krita(self._selected_colour)
@@ -165,6 +178,7 @@ class ColourPickerController:
         self._pending_commit = None
         selection_before_commit = self._selection_before_pending_commit
         self._selection_before_pending_commit = None
+        self._ignore_next_external_sync = False
         if colour is None:
             return
 

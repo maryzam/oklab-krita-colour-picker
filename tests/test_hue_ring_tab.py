@@ -10,7 +10,6 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
-    LIGHTNESS_CHART_CHROMA_MAX,
     ChromaLightnessModel,
 )
 from oklab_colour_picker.widgets import HueRingTabWidget, SelectorWidget
@@ -258,7 +257,7 @@ def test_ring_drag_does_not_change_chroma_slider_value(qtbot):
 
     c_slider = _slider(widget, axis="C")
     assert c_slider._value == pytest.approx(initial_chroma)
-    assert c_slider._max == pytest.approx(LIGHTNESS_CHART_CHROMA_MAX)
+    assert c_slider._max == pytest.approx(color_math.SRGB_MAX_CHROMA)
     initial_thumb_x = c_slider._value_to_x(c_slider._value)
 
     # Push the same chroma at a different hue back into the widget — this is
@@ -269,7 +268,7 @@ def test_ring_drag_does_not_change_chroma_slider_value(qtbot):
     widget.set_selected_colour(rotated)
 
     assert c_slider._value == pytest.approx(initial_chroma)
-    assert c_slider._max == pytest.approx(LIGHTNESS_CHART_CHROMA_MAX)
+    assert c_slider._max == pytest.approx(color_math.SRGB_MAX_CHROMA)
     assert c_slider._value_to_x(c_slider._value) == initial_thumb_x
 
 
@@ -289,13 +288,13 @@ def test_ring_drag_updates_chroma_gamut_overlay(qtbot):
     widget = _build_widget(qtbot, initial_lightness=0.55, initial_chroma=0.05, selected=initial)
 
     c_slider = _slider(widget, axis="C")
-    expected_a = min(LIGHTNESS_CHART_CHROMA_MAX, gamut_a)
+    expected_a = min(color_math.SRGB_MAX_CHROMA, gamut_a)
     assert c_slider._gamut_max == pytest.approx(expected_a)
 
     rotated = color_math.oklch_to_oklab([0.55, 0.05, hue_b])
     widget.set_selected_colour(rotated)
 
-    expected_b = min(LIGHTNESS_CHART_CHROMA_MAX, gamut_b)
+    expected_b = min(color_math.SRGB_MAX_CHROMA, gamut_b)
     assert c_slider._gamut_max == pytest.approx(expected_b)
 
 

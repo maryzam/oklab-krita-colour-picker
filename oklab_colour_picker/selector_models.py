@@ -33,11 +33,6 @@ def chroma_lightness_band_width(outer_radius: float) -> float:
     """Pixel thickness of the hue donut at a given outer radius."""
     return min(float(outer_radius) * CHROMA_LIGHTNESS_BAND_FRACTION, CHROMA_LIGHTNESS_BAND_MAX_PX)
 
-# Chart x-axis extent for the Lightness tab. Trades a small margin past the
-# sRGB cusp (~0.3225) for a tighter widget — we deliberately do not match
-# oklch.com's 0.37 default. Validity is still gated by max_chroma_for_lh, so
-# any pixel whose chroma exceeds the per-hue gamut renders transparent.
-LIGHTNESS_CHART_CHROMA_MAX = 0.325
 _LIGHTNESS_SNAP_SAMPLES = np.linspace(0.0, 1.0, 257)
 _HUE_SNAP_SAMPLES = np.linspace(0.0, math.tau, 361, endpoint=False)
 _SNAP_BOUNDARY_ITERATIONS = 20
@@ -51,7 +46,7 @@ class LightnessSliceModel:
     """Circular hue/chroma selector at a fixed OKLab lightness.
 
     Radius maps linearly to absolute OKLCh chroma in
-    ``[0, LIGHTNESS_CHART_CHROMA_MAX]``, matching the Lightness tab's x-axis
+    ``[0, color_math.SRGB_MAX_CHROMA]``, matching the Lightness tab's x-axis
     extent. Pixels whose chroma exceeds the per-hue sRGB cusp at this
     lightness fall outside the gamut leaf and render transparent, so the
     irregular gamut outline is visible directly on the disk.
@@ -68,7 +63,7 @@ class LightnessSliceModel:
             return None
 
         normalized_radius, hue, _, _ = geometry
-        chroma = normalized_radius * LIGHTNESS_CHART_CHROMA_MAX
+        chroma = normalized_radius * color_math.SRGB_MAX_CHROMA
         max_chroma = color_math.max_chroma_for_lh(self.lightness, hue)
         if chroma > max_chroma + CHROMA_EPSILON:
             return None
@@ -85,9 +80,7 @@ class LightnessSliceModel:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
 
         normalized_radius, hue, circle_valid = geometry
-        chroma = normalized_radius * LIGHTNESS_CHART_CHROMA_MAX
-        max_chroma = color_math.max_chroma_for_lh(self.lightness, hue)
-        valid = circle_valid & (chroma <= max_chroma + CHROMA_EPSILON)
+        chroma = normalized_radius * color_math.SRGB_MAX_CHROMA
         oklch = np.stack(
             (
                 np.full_like(normalized_radius, self.lightness, dtype=float),
@@ -96,7 +89,11 @@ class LightnessSliceModel:
             ),
             axis=-1,
         )
-        return color_math.oklch_to_oklab(oklch), valid
+        oklab = color_math.oklch_to_oklab(oklch)
+        valid = circle_valid & color_math.in_srgb_gamut(
+            color_math.oklab_to_srgb(oklab), epsilon=1e-6
+        )
+        return oklab, valid
 
     def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
@@ -106,10 +103,10 @@ class LightnessSliceModel:
         max_chroma = color_math.max_chroma_for_lh(lightness, hue)
         if chroma > max_chroma + CHROMA_EPSILON:
             return None
-        if chroma > LIGHTNESS_CHART_CHROMA_MAX + CHROMA_EPSILON:
+        if chroma > color_math.SRGB_MAX_CHROMA + CHROMA_EPSILON:
             return None
 
-        normalized_radius = float(np.clip(chroma / LIGHTNESS_CHART_CHROMA_MAX, 0.0, 1.0))
+        normalized_radius = float(np.clip(chroma / color_math.SRGB_MAX_CHROMA, 0.0, 1.0))
         return _position_from_circle(normalized_radius, hue, size)
 
     def snapped_color_at_position(
@@ -128,7 +125,7 @@ class LightnessSliceModel:
             return None
 
         normalized_radius, hue = geometry
-        desired_chroma = normalized_radius * LIGHTNESS_CHART_CHROMA_MAX
+        desired_chroma = normalized_radius * color_math.SRGB_MAX_CHROMA
         max_chroma = float(color_math.max_chroma_for_lh(self.lightness, hue))
         chroma = max(0.0, min(desired_chroma, max_chroma))
         return color_math.oklch_to_oklab([self.lightness, chroma, hue])
@@ -138,7 +135,7 @@ class LightnessSliceModel:
 class LightnessChromaSliceModel:
     """Lightness/chroma selector at a fixed OKLab hue.
 
-    The x axis spans absolute OKLCh chroma in ``[0, LIGHTNESS_CHART_CHROMA_MAX]``,
+    The x axis spans absolute OKLCh chroma in ``[0, color_math.SRGB_MAX_CHROMA]``,
     so the selectable region traces the per-hue sRGB gamut leaf rather than
     filling the whole rectangle.
     """
@@ -156,7 +153,7 @@ class LightnessChromaSliceModel:
 
         x, y, width, height = bounds
         lightness = 1.0 - y / (height - 1.0)
-        chroma = (x / (width - 1.0)) * LIGHTNESS_CHART_CHROMA_MAX
+        chroma = (x / (width - 1.0)) * color_math.SRGB_MAX_CHROMA
         max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
         if chroma > max_chroma + CHROMA_EPSILON:
             return None
@@ -174,14 +171,7 @@ class LightnessChromaSliceModel:
 
         x, y, width, height, in_bounds = bounds
         lightness = 1.0 - y / (height - 1.0)
-        chroma = (x / (width - 1.0)) * LIGHTNESS_CHART_CHROMA_MAX
-        # max_chroma_for_lh depends only on lightness here (hue is fixed), so
-        # collapse the grid to its unique lightnesses before invoking the
-        # Halley-iterated gamut math, then scatter the result back.
-        unique_lightness, inverse = np.unique(lightness, return_inverse=True)
-        max_chroma_unique = color_math.max_chroma_for_lh(unique_lightness, self.hue)
-        max_chroma = np.asarray(max_chroma_unique)[inverse].reshape(lightness.shape)
-        valid = in_bounds & (chroma <= max_chroma + CHROMA_EPSILON)
+        chroma = (x / (width - 1.0)) * color_math.SRGB_MAX_CHROMA
         oklch = np.stack(
             (
                 lightness,
@@ -190,7 +180,11 @@ class LightnessChromaSliceModel:
             ),
             axis=-1,
         )
-        return color_math.oklch_to_oklab(oklch), valid
+        oklab = color_math.oklch_to_oklab(oklch)
+        valid = in_bounds & color_math.in_srgb_gamut(
+            color_math.oklab_to_srgb(oklab), epsilon=1e-6
+        )
+        return oklab, valid
 
     def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         bounds = _size_bounds(size)
@@ -209,10 +203,10 @@ class LightnessChromaSliceModel:
         max_chroma = color_math.max_chroma_for_lh(lightness, self.hue)
         if chroma > max_chroma + CHROMA_EPSILON:
             return None
-        if chroma > LIGHTNESS_CHART_CHROMA_MAX + CHROMA_EPSILON:
+        if chroma > color_math.SRGB_MAX_CHROMA + CHROMA_EPSILON:
             return None
 
-        chroma_fraction = min(chroma / LIGHTNESS_CHART_CHROMA_MAX, 1.0)
+        chroma_fraction = min(chroma / color_math.SRGB_MAX_CHROMA, 1.0)
         return (
             float(chroma_fraction * (width - 1.0)),
             float((1.0 - lightness) * (height - 1.0)),
@@ -228,7 +222,7 @@ class LightnessChromaSliceModel:
 
         x, y, width, height = geometry
         lightness = 1.0 - y / (height - 1.0)
-        desired_chroma = (x / (width - 1.0)) * LIGHTNESS_CHART_CHROMA_MAX
+        desired_chroma = (x / (width - 1.0)) * color_math.SRGB_MAX_CHROMA
         max_chroma = float(color_math.max_chroma_for_lh(lightness, self.hue))
         chroma = max(0.0, min(desired_chroma, max_chroma))
         return color_math.oklch_to_oklab([lightness, chroma, self.hue])
@@ -275,8 +269,6 @@ class HueLightnessSliceModel:
 
         normalized_radius, hue, circle_valid = geometry
         lightness = 1.0 - normalized_radius
-        max_chroma = color_math.max_chroma_for_lh(lightness, hue)
-        valid = circle_valid & (self.chroma <= max_chroma + CHROMA_EPSILON)
         oklch = np.stack(
             (
                 lightness,
@@ -285,7 +277,11 @@ class HueLightnessSliceModel:
             ),
             axis=-1,
         )
-        return color_math.oklch_to_oklab(oklch), valid
+        oklab = color_math.oklch_to_oklab(oklch)
+        valid = circle_valid & color_math.in_srgb_gamut(
+            color_math.oklab_to_srgb(oklab), epsilon=1e-6
+        )
+        return oklab, valid
 
     def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         bounds = _size_bounds(size)
@@ -356,12 +352,6 @@ class ChromaLightnessModel:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
 
         normalized_radius, hue, circle_valid = geometry
-        max_chroma = color_math.max_chroma_for_lh(self.lightness, hue)
-        valid = (
-            circle_valid
-            & _on_chroma_lightness_ring(normalized_radius, _radius_for_size(size))
-            & (self.chroma <= max_chroma + CHROMA_EPSILON)
-        )
         oklch = np.stack(
             (
                 np.full_like(normalized_radius, self.lightness, dtype=float),
@@ -370,7 +360,13 @@ class ChromaLightnessModel:
             ),
             axis=-1,
         )
-        return color_math.oklch_to_oklab(oklch), valid
+        oklab = color_math.oklch_to_oklab(oklch)
+        valid = (
+            circle_valid
+            & _on_chroma_lightness_ring(normalized_radius, _radius_for_size(size))
+            & color_math.in_srgb_gamut(color_math.oklab_to_srgb(oklab), epsilon=1e-6)
+        )
+        return oklab, valid
 
     def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
         lightness, chroma, hue = color_math.oklab_to_oklch(oklab)

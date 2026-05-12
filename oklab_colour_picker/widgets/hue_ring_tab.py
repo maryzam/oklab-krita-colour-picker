@@ -17,7 +17,6 @@ from PyQt5 import QtCore, QtGui, QtWidgets, sip
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
     CHROMA_EPSILON,
-    LIGHTNESS_CHART_CHROMA_MAX,
     ChromaLightnessModel,
     chroma_lightness_band_width,
 )
@@ -226,8 +225,8 @@ class _CentralPanel(QtWidgets.QWidget):
         self._lightness_slider.set_value(lightness)
         self._lightness_slider.set_other_axis(chroma)
         gamut_max = float(color_math.max_chroma_for_lh(lightness, hue))
-        effective_max = max(0.0, min(LIGHTNESS_CHART_CHROMA_MAX, gamut_max))
-        # The C slider's track length stays anchored to LIGHTNESS_CHART_CHROMA_MAX
+        effective_max = max(0.0, min(color_math.SRGB_MAX_CHROMA, gamut_max))
+        # The C slider's track length stays anchored to color_math.SRGB_MAX_CHROMA
         # so the thumb's x-position depends only on the actual chroma value.
         # Rescaling by per-hue gamut max would shift the thumb every time the
         # user rotates the ring even though chroma is unchanged.
@@ -306,7 +305,7 @@ class _OklchGradientSlider(QtWidgets.QWidget):
     """Horizontal slider whose track is a live OKLCh gradient.
 
     ``axis="L"`` varies lightness in [0, 1] at fixed (chroma, hue);
-    ``axis="C"`` varies chroma in [0, LIGHTNESS_CHART_CHROMA_MAX] at fixed
+    ``axis="C"`` varies chroma in [0, color_math.SRGB_MAX_CHROMA] at fixed
     (lightness, hue).
     """
 
@@ -321,7 +320,7 @@ class _OklchGradientSlider(QtWidgets.QWidget):
         if axis not in ("L", "C"):
             raise ValueError("axis must be 'L' or 'C'")
         self._axis = axis
-        self._max = 1.0 if axis == "L" else LIGHTNESS_CHART_CHROMA_MAX
+        self._max = 1.0 if axis == "L" else color_math.SRGB_MAX_CHROMA
         self._value = 0.5 if axis == "L" else 0.1
         self._other = 0.1 if axis == "L" else 0.5
         self._hue = 0.0

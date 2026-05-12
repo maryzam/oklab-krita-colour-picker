@@ -79,14 +79,6 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
     def __init__(self, controller: DockController, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._controller = controller
-        # Pull current Krita foreground synchronously if the controller supports
-        # it, so the initial paint reflects the real FG rather than the default.
-        sync = getattr(controller, "sync_external_foreground", None)
-        if callable(sync):
-            try:
-                sync()
-            except Exception:
-                pass
         self._selected_colour = _selected_or_default(controller.selected_colour)
         self._tabs = QtWidgets.QTabWidget(self)
         self._selectors: dict[SelectorMode, SelectorWidget] = {}

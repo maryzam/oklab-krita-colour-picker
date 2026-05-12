@@ -29,7 +29,6 @@ from PyQt5 import QtCore, QtGui
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
-    LIGHTNESS_CHART_CHROMA_MAX,
     LightnessSliceModel,
 )
 from oklab_colour_picker.widgets.selector import SelectorWidget
@@ -84,7 +83,7 @@ class LightnessSliceDiskWidget(SelectorWidget):
         pen.setCosmetic(True)
         painter.setPen(pen)
         for chroma in self._CHROMA_RINGS:
-            ring_radius = radius * (chroma / LIGHTNESS_CHART_CHROMA_MAX)
+            ring_radius = radius * (chroma / color_math.SRGB_MAX_CHROMA)
             if ring_radius <= 0.5 or ring_radius > radius:
                 continue
             painter.drawEllipse(QtCore.QPointF(cx, cy), ring_radius, ring_radius)
@@ -135,9 +134,9 @@ class LightnessSliceDiskWidget(SelectorWidget):
         )
         # Cap at the disk's chroma extent so the contour traces the rim
         # rather than running off the widget where the gamut leaf bulges
-        # past LIGHTNESS_CHART_CHROMA_MAX.
-        capped = np.minimum(max_chroma, LIGHTNESS_CHART_CHROMA_MAX)
-        radii = radius * capped / LIGHTNESS_CHART_CHROMA_MAX
+        # past color_math.SRGB_MAX_CHROMA.
+        capped = np.minimum(max_chroma, color_math.SRGB_MAX_CHROMA)
+        radii = radius * capped / color_math.SRGB_MAX_CHROMA
         xs = cx + radii * np.cos(hues)
         ys = cy - radii * np.sin(hues)
 

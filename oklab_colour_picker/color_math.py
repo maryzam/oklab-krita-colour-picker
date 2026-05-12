@@ -351,4 +351,7 @@ def _compute_srgb_max_chroma() -> float:
     return float(np.max(max_chroma_for_lh(grid_l, grid_h)))
 
 
-SRGB_MAX_CHROMA = _compute_srgb_max_chroma()
+# Rounded-up global sRGB OKLCh chroma extent. Keeping this as a literal avoids
+# a dense 256x720 gamut-boundary sweep during plugin import while leaving a
+# small margin above the sampled maximum (~0.3214).
+SRGB_MAX_CHROMA = 0.325

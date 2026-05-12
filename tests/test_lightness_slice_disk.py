@@ -10,7 +10,6 @@ from PyQt5 import QtCore, QtGui
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
-    LIGHTNESS_CHART_CHROMA_MAX,
     LightnessSliceModel,
 )
 from oklab_colour_picker.widgets import LightnessSliceDiskWidget
@@ -70,7 +69,7 @@ def test_disk_widget_renders_overlay_pixels_on_top_of_base(qtbot):
     # inside the leaf at every hue, so at least one of the four cardinal
     # samples on that ring must differ from the bare render.
     cx, cy = 40.0, 40.0
-    radius_px = 40.0 * (0.05 / LIGHTNESS_CHART_CHROMA_MAX)
+    radius_px = 40.0 * (0.05 / color_math.SRGB_MAX_CHROMA)
     cardinals = [
         (int(round(cx + radius_px)), int(cy)),
         (int(round(cx - radius_px)), int(cy)),
@@ -183,7 +182,7 @@ def test_drag_past_gamut_leaf_snaps_to_cusp_at_cursor_hue(qtbot):
     # Snap takes the cursor's hue at release, not the press hue.
     np.testing.assert_allclose(hue % math.tau, 0.0, atol=1e-6)
     # And the chroma equals the per-hue cusp, which is strictly less than
-    # LIGHTNESS_CHART_CHROMA_MAX (the rim).
+    # color_math.SRGB_MAX_CHROMA (the rim).
     expected_chroma = float(color_math.max_chroma_for_lh(0.5, 0.0))
     np.testing.assert_allclose(chroma, expected_chroma, atol=1e-9)
 

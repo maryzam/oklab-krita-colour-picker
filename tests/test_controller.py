@@ -285,6 +285,44 @@ def test_preview_does_not_replace_pending_commit_before_flush():
     np.testing.assert_allclose(controller.selected_colour, committed)
 
 
+def test_external_sync_does_not_override_local_preview_before_commit():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    previous = np.array([0.45, -0.01, 0.02])
+    preview = np.array([0.62, 0.03, -0.04])
+    adapter.foreground_colour = previous
+    controller = ColourPickerController(adapter, scheduler=scheduler)
+    observed = []
+    controller.add_foreground_listener(observed.append)
+
+    controller.set_preview_colour(preview)
+
+    assert controller.sync_external_foreground() is False
+    np.testing.assert_allclose(controller.selected_colour, preview)
+    assert observed == []
+
+
+def test_external_sync_does_not_override_pending_local_commit_before_flush():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    previous = np.array([0.45, -0.01, 0.02])
+    committed = np.array([0.62, 0.03, -0.04])
+    adapter.foreground_colour = previous
+    controller = ColourPickerController(adapter, scheduler=scheduler)
+    observed = []
+    controller.add_foreground_listener(observed.append)
+
+    controller.request_foreground_commit(committed)
+
+    assert controller.sync_external_foreground() is False
+    np.testing.assert_allclose(controller.selected_colour, committed)
+    assert observed == []
+
+    scheduler.run_pending()
+    np.testing.assert_allclose(controller.selected_colour, committed)
+    assert len(adapter.set_foreground_calls) == 1
+
+
 def test_krita_adapter_returns_none_without_active_window():
     adapter = KritaForegroundAdapter(FakeKrita(active_window=None))
 

@@ -52,6 +52,16 @@ def test_dock_panel_uses_current_foreground_on_construction(qtbot):
     np.testing.assert_allclose(panel._readout_panel._current_oklab, colour)
 
 
+def test_dock_panel_construction_does_not_synchronously_resync_foreground(qtbot):
+    colour = color_math.oklch_to_oklab([0.58, 0.07, math.pi / 3.0])
+    controller = FakeController(selected_colour=colour)
+
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+
+    assert controller.sync_count == 0
+
+
 def test_selector_signals_update_controller_and_sibling_indicators(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
