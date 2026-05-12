@@ -393,6 +393,12 @@ def test_chroma_lightness_snap_projects_to_nearest_valid_hue_when_ring_has_gap()
 
     assert snapped is not None
     assert model.position_for_color(snapped, (101.0, 101.0)) is not None
+    lightness, chroma, hue = color_math.oklab_to_oklch(snapped)
+    np.testing.assert_allclose(
+        color_math.max_chroma_for_lh(lightness, hue),
+        chroma,
+        atol=1e-5,
+    )
 
 
 def test_chroma_lightness_rejects_inverse_color_with_mismatched_chroma():

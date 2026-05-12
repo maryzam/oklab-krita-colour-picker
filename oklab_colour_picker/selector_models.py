@@ -467,6 +467,8 @@ def _circle_geometry_arrays(x, y, size: Sequence[float]):
 
 
 def _snap_lightness_to_gamut(chroma: float, hue: float, desired_lightness: float) -> float | None:
+    # The scalar fast path avoids the 257-sample sweep on normal in-gamut
+    # drags, which is the common case.
     if _lightness_in_gamut(chroma, hue, desired_lightness):
         return desired_lightness
 
@@ -494,8 +496,7 @@ def _snap_lightness_to_gamut(chroma: float, hue: float, desired_lightness: float
             valid_lightness=upper,
         )
 
-    candidates = _LIGHTNESS_SNAP_SAMPLES[valid_indices]
-    return float(candidates[int(np.argmin(np.abs(candidates - desired_lightness)))])
+    raise AssertionError("expected contiguous lightness gamut interval")
 
 
 def _bisect_lightness_boundary(
@@ -521,17 +522,70 @@ def _lightness_in_gamut(chroma: float, hue: float, lightness: float) -> bool:
 
 
 def _snap_hue_to_gamut(lightness: float, chroma: float, desired_hue: float) -> float | None:
-    if chroma <= color_math.max_chroma_for_lh(lightness, desired_hue) + CHROMA_EPSILON:
+    desired_hue = float(desired_hue % math.tau)
+    if _hue_in_gamut(lightness, chroma, desired_hue):
         return desired_hue
 
     valid = chroma <= color_math.max_chroma_for_lh(lightness, _HUE_SNAP_SAMPLES) + CHROMA_EPSILON
-    valid_indices = np.flatnonzero(valid)
-    if not valid_indices.size:
+    valid_hues = _HUE_SNAP_SAMPLES[np.flatnonzero(valid)]
+    if not valid_hues.size:
         return None
 
-    candidates = _HUE_SNAP_SAMPLES[valid_indices]
-    deltas = np.abs((candidates - desired_hue + math.pi) % math.tau - math.pi)
-    return float(candidates[int(np.argmin(deltas))])
+    clockwise = (valid_hues - desired_hue) % math.tau
+    counterclockwise = (desired_hue - valid_hues) % math.tau
+    cw_hue = float(valid_hues[int(np.argmin(clockwise))])
+    ccw_hue = float(valid_hues[int(np.argmin(counterclockwise))])
+    cw_boundary = _bisect_hue_boundary(
+        lightness,
+        chroma,
+        invalid_hue=desired_hue,
+        valid_hue=cw_hue,
+        clockwise=True,
+    )
+    ccw_boundary = _bisect_hue_boundary(
+        lightness,
+        chroma,
+        invalid_hue=desired_hue,
+        valid_hue=ccw_hue,
+        clockwise=False,
+    )
+    cw_distance = (cw_boundary - desired_hue) % math.tau
+    ccw_distance = (desired_hue - ccw_boundary) % math.tau
+    return cw_boundary if cw_distance <= ccw_distance else ccw_boundary
+
+
+def _bisect_hue_boundary(
+    lightness: float,
+    chroma: float,
+    *,
+    invalid_hue: float,
+    valid_hue: float,
+    clockwise: bool,
+) -> float:
+    invalid_offset = 0.0
+    if clockwise:
+        valid_offset = (valid_hue - invalid_hue) % math.tau
+    else:
+        valid_offset = (invalid_hue - valid_hue) % math.tau
+
+    for _ in range(_SNAP_BOUNDARY_ITERATIONS):
+        midpoint_offset = (invalid_offset + valid_offset) / 2.0
+        if clockwise:
+            midpoint = (invalid_hue + midpoint_offset) % math.tau
+        else:
+            midpoint = (invalid_hue - midpoint_offset) % math.tau
+        if _hue_in_gamut(lightness, chroma, midpoint):
+            valid_offset = midpoint_offset
+        else:
+            invalid_offset = midpoint_offset
+
+    if clockwise:
+        return float((invalid_hue + valid_offset) % math.tau)
+    return float((invalid_hue - valid_offset) % math.tau)
+
+
+def _hue_in_gamut(lightness: float, chroma: float, hue: float) -> bool:
+    return bool(chroma <= color_math.max_chroma_for_lh(lightness, hue) + CHROMA_EPSILON)
 
 
 def _position_from_circle(normalized_radius: float, hue: float, size: Sequence[float]) -> Position | None:
