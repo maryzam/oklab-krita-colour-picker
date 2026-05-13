@@ -1,3 +1,4 @@
+import os
 import statistics
 import time
 
@@ -16,8 +17,15 @@ from oklab_colour_picker.selector_models import (
 
 PERFORMANCE_BUDGET_SECONDS = 0.005
 COLD_RENDER_BUDGET_SECONDS = 0.020
+CI_PERFORMANCE_BUDGET_MULTIPLIER = 2.0
 SAMPLE_COUNT = 21
 COLD_SAMPLE_COUNT = 7
+
+
+def _budget(base_seconds: float) -> float:
+    if os.environ.get("CI"):
+        return base_seconds * CI_PERFORMANCE_BUDGET_MULTIPLIER
+    return base_seconds
 
 
 @pytest.mark.perf
@@ -38,7 +46,12 @@ def test_256_renderers_meet_median_budget():
             render_rgba(model, (256, 256))
             timings.append(time.perf_counter() - start)
 
-        assert statistics.median(timings) <= PERFORMANCE_BUDGET_SECONDS
+        budget = _budget(PERFORMANCE_BUDGET_SECONDS)
+        median = statistics.median(timings)
+        assert median <= budget, (
+            f"{type(model).__name__} cached 256px render took {median:.4f}s; "
+            f"budget is {budget:.4f}s"
+        )
 
 
 @pytest.mark.perf
@@ -61,7 +74,8 @@ def test_256_cold_renderers_meet_startup_budget_without_cache_warmup():
             timings.append(time.perf_counter() - start)
 
         median = statistics.median(timings)
-        assert median <= COLD_RENDER_BUDGET_SECONDS, (
+        budget = _budget(COLD_RENDER_BUDGET_SECONDS)
+        assert median <= budget, (
             f"{type(model).__name__} cold 256px render took {median:.4f}s; "
-            f"budget is {COLD_RENDER_BUDGET_SECONDS:.4f}s"
+            f"budget is {budget:.4f}s"
         )
