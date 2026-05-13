@@ -4,10 +4,8 @@ import numpy as np
 import pytest
 
 from oklab_colour_picker import color_math
-from oklab_colour_picker import renderers
 from oklab_colour_picker.renderers import render_rgba
 from oklab_colour_picker.selector_models import (
-    ChromaLightnessModel,
     LightnessChromaSliceModel,
     HueLightnessSliceModel,
     LightnessSliceModel,
@@ -20,7 +18,6 @@ from oklab_colour_picker.selector_models import (
         LightnessSliceModel(lightness=0.55),
         HueLightnessSliceModel(chroma=0.05),
         LightnessChromaSliceModel(hue=1.25),
-        ChromaLightnessModel(lightness=0.55, chroma=0.05),
     ],
 )
 def test_renderers_return_uint8_rgba_buffers(model):
@@ -46,25 +43,6 @@ def test_render_rgba_returns_mutable_copy_without_corrupting_cache():
     assert np.count_nonzero(actual[..., 3]) > 0
 
 
-def test_hue_ring_render_cache_reuses_nearby_slider_preview_models(monkeypatch):
-    renderers._render_rgba_cached.cache_clear()
-    original = renderers._render_rgba_uncached
-    calls = []
-
-    def counted_render(model, width, height):
-        calls.append(model)
-        return original(model, width, height)
-
-    monkeypatch.setattr(renderers, "_render_rgba_uncached", counted_render)
-
-    first = render_rgba(ChromaLightnessModel(lightness=0.5501, chroma=0.0501), (17, 17))
-    second = render_rgba(ChromaLightnessModel(lightness=0.5502, chroma=0.0502), (17, 17))
-
-    assert len(calls) == 1
-    assert renderers._render_rgba_cached.cache_info().hits == 1
-    np.testing.assert_array_equal(first, second)
-
-
 @pytest.mark.parametrize(
     ("model", "size", "probes"),
     [
@@ -82,11 +60,6 @@ def test_hue_ring_render_cache_reuses_nearby_slider_preview_models(monkeypatch):
             LightnessChromaSliceModel(hue=1.25),
             (33, 21),
             [(0, 0), (16, 10), (32, 20), (33, 10)],
-        ),
-        (
-            ChromaLightnessModel(lightness=0.55, chroma=0.05),
-            (33, 33),
-            [(32, 16), (16, 0), (16, 16), (0, 0)],
         ),
     ],
 )
@@ -132,24 +105,6 @@ def test_hue_lightness_slice_renderer_alpha_marks_fixed_chroma_gamut():
 
     assert np.count_nonzero(rgba[..., 3] == 0) > 0
     assert np.count_nonzero(rgba[..., 3] == 255) > 0
-
-
-def test_chroma_lightness_renderer_masks_out_interior_and_out_of_gamut_hues():
-    chroma = 0.15
-    model = ChromaLightnessModel(lightness=0.55, chroma=chroma)
-    rgba = render_rgba(model, (101, 101))
-
-    assert rgba[50, 50, 3] == 0
-    assert rgba[50, 100, 3] == 255
-    assert rgba[50, 0, 3] == 0
-
-
-def test_chroma_lightness_renderer_has_visible_ring_at_even_sizes():
-    chroma = color_math.max_chroma_for_lh(0.55, 0.0) * 0.35
-    model = ChromaLightnessModel(lightness=0.55, chroma=chroma)
-    rgba = render_rgba(model, (32, 32))
-
-    assert np.count_nonzero(rgba[..., 3]) > 0
 
 
 def _quantize8(oklab):

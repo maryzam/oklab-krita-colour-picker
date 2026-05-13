@@ -133,7 +133,7 @@ def test_hue_chroma_drag_outside_snaps_to_cursor_boundary(qtbot):
     np.testing.assert_allclose(widget.selected_colour, expected)
 
 
-def test_chroma_lightness_drag_outside_snaps_to_cursor_boundary(qtbot):
+def test_lightness_chroma_drag_outside_snaps_to_cursor_boundary(qtbot):
     widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)
     qtbot.addWidget(widget)

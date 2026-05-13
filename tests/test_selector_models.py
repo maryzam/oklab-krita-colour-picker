@@ -5,12 +5,9 @@ import pytest
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
-    CHROMA_LIGHTNESS_BAND_MAX_PX,
-    ChromaLightnessModel,
     LightnessChromaSliceModel,
     HueLightnessSliceModel,
     LightnessSliceModel,
-    chroma_lightness_band_width,
 )
 
 
@@ -146,7 +143,6 @@ def test_lightness_chart_chroma_max_envelopes_srgb_cusp():
         LightnessSliceModel(lightness=0.55),
         HueLightnessSliceModel(chroma=0.05),
         LightnessChromaSliceModel(hue=1.25),
-        ChromaLightnessModel(lightness=0.55, chroma=0.05),
     ],
 )
 def test_vectorized_selector_render_paths_do_not_use_halley_boundary_solver(monkeypatch, model):
@@ -168,7 +164,6 @@ def test_vectorized_selector_render_paths_do_not_use_halley_boundary_solver(monk
         LightnessSliceModel(lightness=0.55),
         HueLightnessSliceModel(chroma=0.05),
         LightnessChromaSliceModel(hue=1.25),
-        ChromaLightnessModel(lightness=0.55, chroma=0.05),
     ],
 )
 @pytest.mark.parametrize(
@@ -285,7 +280,6 @@ def test_lightness_chroma_slice_rejects_color_from_different_hue_plane():
 
     assert model.position_for_color(color, (101.0, 101.0)) is None
 
-
 def test_lightness_chroma_slice_rejects_color_from_antipodal_hue_ray():
     model = LightnessChromaSliceModel(hue=0.0)
     color = color_math.oklch_to_oklab([0.5, 0.05, math.pi])
@@ -385,111 +379,3 @@ def test_hue_lightness_slice_rejects_color_with_mismatched_chroma():
     color = color_math.oklch_to_oklab([0.5, 0.06, math.pi / 2.0])
 
     assert model.position_for_color(color, (101.0, 101.0)) is None
-
-
-def test_chroma_lightness_uses_fixed_lightness_and_chroma_with_position_hue():
-    chroma = color_math.max_chroma_for_lh(0.6, math.pi / 2.0) * 0.5
-    model = ChromaLightnessModel(lightness=0.6, chroma=chroma)
-
-    actual = model.color_at_position((50.0, 0.0), (101.0, 101.0))
-
-    expected = color_math.oklch_to_oklab([0.6, chroma, math.pi / 2.0])
-    np.testing.assert_allclose(actual, expected, atol=1e-12)
-
-
-@pytest.mark.parametrize(
-    ("lightness", "chroma"),
-    [(-0.01, 0.1), (1.01, 0.1), (math.nan, 0.1), (0.5, -0.01), (0.5, math.nan)],
-)
-def test_chroma_lightness_validates_lightness_and_chroma(lightness, chroma):
-    with pytest.raises(ValueError, match="lightness|chroma"):
-        ChromaLightnessModel(lightness=lightness, chroma=chroma)
-
-
-def test_chroma_lightness_rejects_out_of_circle_and_out_of_gamut_hues():
-    model = ChromaLightnessModel(lightness=0.5, chroma=0.4)
-
-    assert model.color_at_position((0.0, 0.0), (101.0, 101.0)) is None
-    assert model.color_at_position((100.0, 50.0), (101.0, 101.0)) is None
-
-
-def test_chroma_lightness_rejects_degenerate_size():
-    model = ChromaLightnessModel(lightness=0.5, chroma=0.1)
-
-    assert model.color_at_position((0.0, 0.0), (1.0, 1.0)) is None
-    assert model.position_for_color([0.5, 0.1, 0.0], (1.0, 1.0)) is None
-
-
-def test_chroma_lightness_rejects_interior_positions_to_preserve_inverse_symmetry():
-    model = ChromaLightnessModel(lightness=0.55, chroma=color_math.max_chroma_for_lh(0.55, 0.0) * 0.35)
-
-    # Pixel sits ~10 px from the centre of a 101x101 widget — well inside the
-    # donut hole (outer radius 50, band width 25 → inner edge at 25 px).
-    assert model.color_at_position((60.0, 50.0), (101.0, 101.0)) is None
-
-
-def test_chroma_lightness_snap_projects_interior_to_ring_hue():
-    chroma = color_math.max_chroma_for_lh(0.55, 0.0) * 0.35
-    model = ChromaLightnessModel(lightness=0.55, chroma=chroma)
-    snapped = model.snapped_color_at_position((60.0, 50.0), (101.0, 101.0))
-
-    expected = model.color_at_position((100.0, 50.0), (101.0, 101.0))
-    assert expected is not None
-    np.testing.assert_allclose(snapped, expected, atol=1e-12)
-
-
-def test_chroma_lightness_snap_projects_to_nearest_valid_hue_when_ring_has_gap():
-    model = ChromaLightnessModel(lightness=0.5, chroma=0.2)
-    assert model.color_at_position((50.0, 0.0), (101.0, 101.0)) is None
-
-    snapped = model.snapped_color_at_position((50.0, 0.0), (101.0, 101.0))
-
-    assert snapped is not None
-    assert model.position_for_color(snapped, (101.0, 101.0)) is not None
-    lightness, chroma, hue = color_math.oklab_to_oklch(snapped)
-    np.testing.assert_allclose(
-        color_math.max_chroma_for_lh(lightness, hue),
-        chroma,
-        atol=1e-5,
-    )
-
-
-def test_chroma_lightness_rejects_inverse_color_with_mismatched_chroma():
-    model = ChromaLightnessModel(lightness=0.55, chroma=0.05)
-
-    assert model.position_for_color(color_math.oklch_to_oklab([0.55, 0.06, 0.0]), (101.0, 101.0)) is None
-
-
-def test_chroma_lightness_band_width_uses_half_radius_below_cap():
-    # For small rings the band fills 50% of the outer radius, giving the user
-    # the full hue ring even on tiny widgets.
-    assert chroma_lightness_band_width(20.0) == pytest.approx(10.0)
-    assert chroma_lightness_band_width(60.0) == pytest.approx(30.0)
-
-
-def test_chroma_lightness_band_width_clamps_to_pixel_cap():
-    # On large widgets the band caps at CHROMA_LIGHTNESS_BAND_MAX_PX so the
-    # donut doesn't grow unbounded — extra width past the cap is wasted.
-    assert chroma_lightness_band_width(200.0) == pytest.approx(CHROMA_LIGHTNESS_BAND_MAX_PX)
-    assert chroma_lightness_band_width(1000.0) == pytest.approx(CHROMA_LIGHTNESS_BAND_MAX_PX)
-
-
-def test_chroma_lightness_band_thickness_caps_on_large_widget():
-    # Outer radius 100 → band capped at 40 px → inner edge at 60 px. A pixel
-    # 50 px from the centre should now sit inside the donut hole, even though
-    # the previous 55%-fraction rule would have placed it on the band.
-    model = ChromaLightnessModel(lightness=0.55, chroma=color_math.max_chroma_for_lh(0.55, 0.0) * 0.35)
-
-    assert model.color_at_position((50.0, 100.0), (201.0, 201.0)) is None
-    assert model.color_at_position((100.0 + 70.0, 100.0), (201.0, 201.0)) is not None
-
-
-@pytest.mark.parametrize("position", [(100.0, 50.0), (50.0, 0.0), (0.0, 50.0), (50.0, 100.0)])
-def test_chroma_lightness_round_trips_position_and_color(position):
-    chroma = color_math.max_chroma_for_lh(0.55, 0.0) * 0.35
-    model = ChromaLightnessModel(lightness=0.55, chroma=chroma)
-
-    color = model.color_at_position(position, (101.0, 101.0))
-    actual = model.position_for_color(color, (101.0, 101.0))
-
-    np.testing.assert_allclose(actual, position, atol=1e-9)

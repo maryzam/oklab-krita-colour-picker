@@ -27,7 +27,6 @@ def test_dock_panel_constructs_all_selector_views_and_switches_modes(qtbot):
         "lightness-slice-selector",
         "hue-lightness-slice-selector",
         "lightness-chroma-slice-selector",
-        "chroma-lightness-selector",
     ]
     assert panel.mode == SelectorMode.LIGHTNESS_SLICE
 

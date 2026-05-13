@@ -11,7 +11,6 @@ from PyQt5 import QtWidgets
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
-    ChromaLightnessModel,
     HueLightnessSliceModel,
     LightnessChromaSliceModel,
     LightnessSliceModel,
@@ -48,21 +47,18 @@ class SelectorMode(str, Enum):
     LIGHTNESS_SLICE = "lightness_slice"
     HUE_LIGHTNESS_SLICE = "hue_lightness_slice"
     LIGHTNESS_CHROMA_SLICE = "lightness_chroma_slice"
-    CHROMA_LIGHTNESS = "chroma_lightness"
 
 
 MODE_LABELS = {
     SelectorMode.LIGHTNESS_SLICE: "Hue/Chroma",
     SelectorMode.HUE_LIGHTNESS_SLICE: "Hue/Lightness",
     SelectorMode.LIGHTNESS_CHROMA_SLICE: "Lightness/Chroma",
-    SelectorMode.CHROMA_LIGHTNESS: "Hue Ring",
 }
 
 MODE_OBJECT_NAMES = {
     SelectorMode.LIGHTNESS_SLICE: "lightness-slice-selector",
     SelectorMode.HUE_LIGHTNESS_SLICE: "hue-lightness-slice-selector",
     SelectorMode.LIGHTNESS_CHROMA_SLICE: "lightness-chroma-slice-selector",
-    SelectorMode.CHROMA_LIGHTNESS: "chroma-lightness-selector",
 }
 
 DEFAULT_COLOUR = np.array([0.5, 0.0, 0.0], dtype=float)
@@ -223,10 +219,6 @@ def _build_selector_widget(
     model: object,
     parent: QtWidgets.QWidget,
 ) -> SelectorWidget | QtWidgets.QWidget:
-    if mode == SelectorMode.CHROMA_LIGHTNESS:
-        from oklab_colour_picker.widgets.hue_ring_tab import HueRingTabWidget
-
-        return HueRingTabWidget(model, parent)
     if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
         from oklab_colour_picker.widgets.hue_lightness_slice_disk import HueLightnessSliceDiskWidget
 
@@ -249,7 +241,7 @@ def _model_for_colour(mode: SelectorMode, oklab: Sequence[float]) -> object:
         return HueLightnessSliceModel(chroma=chroma)
     if mode == SelectorMode.LIGHTNESS_CHROMA_SLICE:
         return LightnessChromaSliceModel(hue=hue)
-    return ChromaLightnessModel(lightness=lightness, chroma=chroma)
+    raise AssertionError(f"unhandled selector mode: {mode!r}")
 
 
 def _selected_or_default(oklab: Sequence[float] | None) -> np.ndarray:
