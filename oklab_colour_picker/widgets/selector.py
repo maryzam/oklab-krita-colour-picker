@@ -72,7 +72,6 @@ class SelectorWidget(QtWidgets.QWidget):
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
         painter.setClipRect(event.rect())
 
         try:
@@ -263,6 +262,7 @@ class SelectorWidget(QtWidgets.QWidget):
 
         x, y = position
         outer = QtCore.QPointF(x, y)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
         painter.setBrush(QtCore.Qt.NoBrush)
         painter.setPen(QtGui.QPen(QtCore.Qt.black, 3.0))
         painter.drawEllipse(outer, 5.0, 5.0)

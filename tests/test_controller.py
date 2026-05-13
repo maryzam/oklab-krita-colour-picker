@@ -181,7 +181,7 @@ def test_external_change_clears_stale_self_feedback_suppression():
     np.testing.assert_allclose(observed[-1], normalize_oklab_for_krita(committed))
 
 
-def test_external_sync_refreshes_failed_commit_rollback_snapshot():
+def test_external_sync_does_not_refresh_failed_commit_snapshot_during_pending_interaction():
     scheduler = FakeScheduler()
     adapter = FakeKritaAdapter(available=False)
     controller = ColourPickerController(adapter, scheduler=scheduler)
@@ -191,11 +191,11 @@ def test_external_sync_refreshes_failed_commit_rollback_snapshot():
 
     controller.request_foreground_commit(first_pending)
     adapter.foreground_colour = external
-    assert controller.sync_external_foreground() is True
+    assert controller.sync_external_foreground() is False
     controller.request_foreground_commit(latest_pending)
     scheduler.run_pending()
 
-    np.testing.assert_allclose(controller.selected_colour, external)
+    assert controller.selected_colour is None
 
 
 def test_hidden_dock_stops_polling_and_visible_dock_restarts_it():
@@ -283,6 +283,99 @@ def test_preview_does_not_replace_pending_commit_before_flush():
 
     np.testing.assert_allclose(adapter.set_foreground_calls[0], committed)
     np.testing.assert_allclose(controller.selected_colour, committed)
+
+
+def test_external_sync_does_not_override_local_preview_before_commit():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    clock = FakeClock()
+    previous = np.array([0.45, -0.01, 0.02])
+    preview = np.array([0.62, 0.03, -0.04])
+    adapter.foreground_colour = previous
+    controller = ColourPickerController(adapter, scheduler=scheduler, clock=clock)
+    observed = []
+    controller.add_foreground_listener(observed.append)
+
+    controller.set_preview_colour(preview)
+
+    assert controller.sync_external_foreground() is False
+    np.testing.assert_allclose(controller.selected_colour, preview)
+    assert observed == []
+
+
+def test_external_sync_does_not_override_preview_across_repeated_polls():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    clock = FakeClock()
+    previous = np.array([0.45, -0.01, 0.02])
+    preview = np.array([0.62, 0.03, -0.04])
+    adapter.foreground_colour = previous
+    controller = ColourPickerController(adapter, scheduler=scheduler, clock=clock)
+    observed = []
+    controller.add_foreground_listener(observed.append)
+
+    controller.set_preview_colour(preview)
+
+    assert controller.sync_external_foreground() is False
+    clock.advance(0.25)
+    assert controller.sync_external_foreground() is False
+    np.testing.assert_allclose(controller.selected_colour, preview)
+    assert observed == []
+
+
+def test_preview_cancellation_does_not_drop_external_sync_guard():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    clock = FakeClock()
+    previous = np.array([0.45, -0.01, 0.02])
+    preview = np.array([0.62, 0.03, -0.04])
+    adapter.foreground_colour = previous
+    controller = ColourPickerController(adapter, scheduler=scheduler, clock=clock)
+    observed = []
+    controller.add_foreground_listener(observed.append)
+
+    controller.set_preview_colour(preview)
+    controller.set_preview_colour(None)
+
+    assert controller.sync_external_foreground() is False
+    assert observed == []
+
+
+def test_external_sync_resumes_after_preview_guard_expires():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    clock = FakeClock()
+    previous = np.array([0.45, -0.01, 0.02])
+    preview = np.array([0.62, 0.03, -0.04])
+    adapter.foreground_colour = previous
+    controller = ColourPickerController(adapter, scheduler=scheduler, clock=clock)
+
+    controller.set_preview_colour(preview)
+    clock.advance(0.76)
+
+    assert controller.sync_external_foreground() is True
+    np.testing.assert_allclose(controller.selected_colour, previous)
+
+
+def test_external_sync_does_not_override_pending_local_commit_before_flush():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    previous = np.array([0.45, -0.01, 0.02])
+    committed = np.array([0.62, 0.03, -0.04])
+    adapter.foreground_colour = previous
+    controller = ColourPickerController(adapter, scheduler=scheduler)
+    observed = []
+    controller.add_foreground_listener(observed.append)
+
+    controller.request_foreground_commit(committed)
+
+    assert controller.sync_external_foreground() is False
+    np.testing.assert_allclose(controller.selected_colour, committed)
+    assert observed == []
+
+    scheduler.run_pending()
+    np.testing.assert_allclose(controller.selected_colour, committed)
+    assert len(adapter.set_foreground_calls) == 1
 
 
 def test_krita_adapter_returns_none_without_active_window():
@@ -384,6 +477,17 @@ class FakeScheduler:
         self._callbacks = []
         for callback in callbacks:
             callback()
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += float(seconds)
 
 
 class FakeRepeatingTimer:

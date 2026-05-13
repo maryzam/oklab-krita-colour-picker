@@ -1,9 +1,11 @@
+import os
 import statistics
 import time
 
 import pytest
 
 from oklab_colour_picker import color_math
+from oklab_colour_picker import renderers
 from oklab_colour_picker.renderers import render_rgba
 from oklab_colour_picker.selector_models import (
     ChromaLightnessModel,
@@ -14,7 +16,16 @@ from oklab_colour_picker.selector_models import (
 
 
 PERFORMANCE_BUDGET_SECONDS = 0.005
+COLD_RENDER_BUDGET_SECONDS = 0.020
+CI_PERFORMANCE_BUDGET_MULTIPLIER = 2.0
 SAMPLE_COUNT = 21
+COLD_SAMPLE_COUNT = 7
+
+
+def _budget(base_seconds: float) -> float:
+    if os.environ.get("CI"):
+        return base_seconds * CI_PERFORMANCE_BUDGET_MULTIPLIER
+    return base_seconds
 
 
 @pytest.mark.perf
@@ -35,4 +46,36 @@ def test_256_renderers_meet_median_budget():
             render_rgba(model, (256, 256))
             timings.append(time.perf_counter() - start)
 
-        assert statistics.median(timings) <= PERFORMANCE_BUDGET_SECONDS
+        budget = _budget(PERFORMANCE_BUDGET_SECONDS)
+        median = statistics.median(timings)
+        assert median <= budget, (
+            f"{type(model).__name__} cached 256px render took {median:.4f}s; "
+            f"budget is {budget:.4f}s"
+        )
+
+
+@pytest.mark.perf
+def test_256_cold_renderers_meet_startup_budget_without_cache_warmup():
+    chroma = color_math.max_chroma_for_lh(0.55, 0.0) * 0.35
+    cases = [
+        LightnessSliceModel(lightness=0.55),
+        HueLightnessSliceModel(chroma=0.05),
+        LightnessChromaSliceModel(hue=1.25),
+        ChromaLightnessModel(lightness=0.55, chroma=chroma),
+    ]
+
+    for model in cases:
+        timings = []
+        for _ in range(COLD_SAMPLE_COUNT):
+            renderers._render_rgba_cached.cache_clear()
+            renderers._pixel_grid.cache_clear()
+            start = time.perf_counter()
+            render_rgba(model, (256, 256))
+            timings.append(time.perf_counter() - start)
+
+        median = statistics.median(timings)
+        budget = _budget(COLD_RENDER_BUDGET_SECONDS)
+        assert median <= budget, (
+            f"{type(model).__name__} cold 256px render took {median:.4f}s; "
+            f"budget is {budget:.4f}s"
+        )

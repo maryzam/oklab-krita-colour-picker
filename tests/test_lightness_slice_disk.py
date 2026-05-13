@@ -10,7 +10,6 @@ from PyQt5 import QtCore, QtGui
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
-    LIGHTNESS_CHART_CHROMA_MAX,
     LightnessSliceModel,
 )
 from oklab_colour_picker.widgets import LightnessSliceDiskWidget
@@ -70,7 +69,7 @@ def test_disk_widget_renders_overlay_pixels_on_top_of_base(qtbot):
     # inside the leaf at every hue, so at least one of the four cardinal
     # samples on that ring must differ from the bare render.
     cx, cy = 40.0, 40.0
-    radius_px = 40.0 * (0.05 / LIGHTNESS_CHART_CHROMA_MAX)
+    radius_px = 40.0 * (0.05 / color_math.SRGB_MAX_CHROMA)
     cardinals = [
         (int(round(cx + radius_px)), int(cy)),
         (int(round(cx - radius_px)), int(cy)),
@@ -115,6 +114,18 @@ def test_set_model_invalidates_gamut_path_cache(qtbot):
     assert second is not first
 
 
+def test_gamut_contour_uses_180_hue_samples(qtbot):
+    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(80, 80)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    path = widget._gamut_path(widget.model.lightness)
+
+    assert path is not None
+    assert path.elementCount() == 181
+
+
 def test_resize_invalidates_gamut_path_cache(qtbot):
     widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
     widget.resize(80, 80)
@@ -123,9 +134,31 @@ def test_resize_invalidates_gamut_path_cache(qtbot):
 
     widget._gamut_path(widget.model.lightness)
     assert widget._gamut_path_cache_key == (0.5, 80, 80)
+    assert widget._gamut_contour_cache_key == 0.5
 
     widget.resize(100, 100)
     assert widget._gamut_path_cache_key is None
+    assert widget._gamut_contour_cache_key == 0.5
+
+
+def test_resize_reuses_expensive_gamut_contour_cache(qtbot, monkeypatch):
+    widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(80, 80)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    first = widget._gamut_path(widget.model.lightness)
+    assert first is not None
+
+    def fail_on_boundary_solver(*_args, **_kwargs):
+        raise AssertionError("resize should reuse normalized gamut contour")
+
+    monkeypatch.setattr(color_math, "max_chroma_for_lh", fail_on_boundary_solver)
+    widget.resize(100, 100)
+    second = widget._gamut_path(widget.model.lightness)
+
+    assert second is not None
+    assert second is not first
 
 
 def test_gamut_path_caps_at_disk_radius(qtbot):
@@ -183,7 +216,7 @@ def test_drag_past_gamut_leaf_snaps_to_cusp_at_cursor_hue(qtbot):
     # Snap takes the cursor's hue at release, not the press hue.
     np.testing.assert_allclose(hue % math.tau, 0.0, atol=1e-6)
     # And the chroma equals the per-hue cusp, which is strictly less than
-    # LIGHTNESS_CHART_CHROMA_MAX (the rim).
+    # color_math.SRGB_MAX_CHROMA (the rim).
     expected_chroma = float(color_math.max_chroma_for_lh(0.5, 0.0))
     np.testing.assert_allclose(chroma, expected_chroma, atol=1e-9)
 
