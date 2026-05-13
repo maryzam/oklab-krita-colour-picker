@@ -13,8 +13,6 @@ from oklab_colour_picker import color_math
 
 
 _RENDER_CACHE_MAXSIZE = 128
-_HUE_RING_LIGHTNESS_CACHE_SCALE = 100
-_HUE_RING_CHROMA_CACHE_SCALE = 1000
 _RenderCacheInfo = namedtuple("CacheInfo", "hits misses maxsize currsize")
 _render_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
 _render_cache_hits = 0
@@ -69,12 +67,6 @@ def _render_rgba_uncached(model: VectorizedSelectorModel, width: int, height: in
 
 
 def _render_cache_key(model: VectorizedSelectorModel, width: int, height: int) -> tuple:
-    from oklab_colour_picker.selector_models import ChromaLightnessModel
-
-    if isinstance(model, ChromaLightnessModel):
-        lightness = int(round(float(model.lightness) * _HUE_RING_LIGHTNESS_CACHE_SCALE))
-        chroma = int(round(float(model.chroma) * _HUE_RING_CHROMA_CACHE_SCALE))
-        return (type(model), lightness, chroma, width, height)
     return (type(model), model, width, height)
 
 

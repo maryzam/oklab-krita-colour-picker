@@ -21,20 +21,8 @@ POSITION_EPSILON = 1e-12
 AB_EPSILON = 1e-9
 CHROMA_EPSILON = 1e-9
 LIGHTNESS_EPSILON = 1e-9
-CHROMA_LIGHTNESS_RING_HALF_WIDTH = 0.5
-# Donut band thickness: band_width = min(outer_radius * 0.5, 40 px). Capping
-# at 40 px keeps the donut from eating the dock on big monitors — past a
-# point a thicker band gives no extra hue precision, only wasted space.
-CHROMA_LIGHTNESS_BAND_FRACTION = 0.5
-CHROMA_LIGHTNESS_BAND_MAX_PX = 40.0
-
-
-def chroma_lightness_band_width(outer_radius: float) -> float:
-    """Pixel thickness of the hue donut at a given outer radius."""
-    return min(float(outer_radius) * CHROMA_LIGHTNESS_BAND_FRACTION, CHROMA_LIGHTNESS_BAND_MAX_PX)
 
 _LIGHTNESS_SNAP_SAMPLES = np.linspace(0.0, 1.0, 257)
-_HUE_SNAP_SAMPLES = np.linspace(0.0, math.tau, 361, endpoint=False)
 _SNAP_BOUNDARY_ITERATIONS = 20
 
 Position = tuple[float, float]
@@ -318,87 +306,6 @@ class HueLightnessSliceModel:
         return color_math.oklch_to_oklab([lightness, self.chroma, hue])
 
 
-@dataclass(frozen=True)
-class ChromaLightnessModel:
-    """Circular hue selector at fixed OKLab lightness and chroma."""
-
-    lightness: float
-    chroma: float
-
-    def __post_init__(self) -> None:
-        _validate_lightness(self.lightness)
-        _validate_chroma(self.chroma)
-
-    def color_at_position(self, position: Sequence[float], size: Sequence[float]) -> np.ndarray | None:
-        geometry = _circle_geometry(position, size)
-        if geometry is None:
-            return None
-
-        normalized_radius, hue, _, radius = geometry
-        if not _on_chroma_lightness_ring(normalized_radius, radius):
-            return None
-        if self.chroma > color_math.max_chroma_for_lh(self.lightness, hue) + CHROMA_EPSILON:
-            return None
-        return color_math.oklch_to_oklab([self.lightness, self.chroma, hue])
-
-    def colors_at_positions(
-        self,
-        x: npt.ArrayLike,
-        y: npt.ArrayLike,
-        size: Sequence[float],
-    ) -> tuple[np.ndarray, np.ndarray]:
-        geometry = _circle_geometry_arrays(x, y, size)
-        if geometry is None:
-            return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
-
-        normalized_radius, hue, circle_valid = geometry
-        ring = circle_valid & _on_chroma_lightness_ring(normalized_radius, _radius_for_size(size))
-        oklab = _empty_color_grid(x)
-        valid = np.zeros_like(ring, dtype=bool)
-        if not np.any(ring):
-            return oklab, valid
-
-        hue_used = hue[ring]
-        oklch_used = np.stack(
-            (
-                np.full_like(hue_used, self.lightness, dtype=float),
-                np.full_like(hue_used, self.chroma, dtype=float),
-                hue_used,
-            ),
-            axis=-1,
-        )
-        oklab_used = color_math.oklch_to_oklab(oklch_used)
-        oklab[ring] = oklab_used
-        valid[ring] = color_math.in_srgb_gamut(
-            color_math.oklab_to_srgb(oklab_used), epsilon=1e-6
-        )
-        return oklab, valid
-
-    def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
-        lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
-        if abs(lightness - self.lightness) > LIGHTNESS_EPSILON:
-            return None
-        if abs(chroma - self.chroma) > CHROMA_EPSILON:
-            return None
-        if self.chroma > color_math.max_chroma_for_lh(self.lightness, hue) + CHROMA_EPSILON:
-            return None
-        return _position_from_circle(1.0, hue, size)
-
-    def snapped_color_at_position(
-        self, position: Sequence[float], size: Sequence[float]
-    ) -> np.ndarray | None:
-        """Hue at the cursor angle, projected to the selectable ring."""
-        geometry = _circle_geometry_projected(position, size)
-        if geometry is None:
-            return None
-
-        _, hue = geometry
-        hue = _snap_hue_to_gamut(self.lightness, self.chroma, hue)
-        if hue is None:
-            return None
-        return color_math.oklch_to_oklab([self.lightness, self.chroma, hue])
-
-
 def _circle_geometry(position: Sequence[float], size: Sequence[float]):
     return _circle_geometry_core(position, size, project=False)
 
@@ -523,73 +430,6 @@ def _lightness_in_gamut(chroma: float, hue: float, lightness: float) -> bool:
     return bool(chroma <= color_math.max_chroma_for_lh(lightness, hue) + CHROMA_EPSILON)
 
 
-def _snap_hue_to_gamut(lightness: float, chroma: float, desired_hue: float) -> float | None:
-    desired_hue = float(desired_hue % math.tau)
-    if _hue_in_gamut(lightness, chroma, desired_hue):
-        return desired_hue
-
-    valid = chroma <= color_math.max_chroma_for_lh(lightness, _HUE_SNAP_SAMPLES) + CHROMA_EPSILON
-    valid_hues = _HUE_SNAP_SAMPLES[np.flatnonzero(valid)]
-    if not valid_hues.size:
-        return None
-
-    clockwise = (valid_hues - desired_hue) % math.tau
-    counterclockwise = (desired_hue - valid_hues) % math.tau
-    cw_hue = float(valid_hues[int(np.argmin(clockwise))])
-    ccw_hue = float(valid_hues[int(np.argmin(counterclockwise))])
-    cw_boundary = _bisect_hue_boundary(
-        lightness,
-        chroma,
-        invalid_hue=desired_hue,
-        valid_hue=cw_hue,
-        clockwise=True,
-    )
-    ccw_boundary = _bisect_hue_boundary(
-        lightness,
-        chroma,
-        invalid_hue=desired_hue,
-        valid_hue=ccw_hue,
-        clockwise=False,
-    )
-    cw_distance = (cw_boundary - desired_hue) % math.tau
-    ccw_distance = (desired_hue - ccw_boundary) % math.tau
-    return cw_boundary if cw_distance <= ccw_distance else ccw_boundary
-
-
-def _bisect_hue_boundary(
-    lightness: float,
-    chroma: float,
-    *,
-    invalid_hue: float,
-    valid_hue: float,
-    clockwise: bool,
-) -> float:
-    invalid_offset = 0.0
-    if clockwise:
-        valid_offset = (valid_hue - invalid_hue) % math.tau
-    else:
-        valid_offset = (invalid_hue - valid_hue) % math.tau
-
-    for _ in range(_SNAP_BOUNDARY_ITERATIONS):
-        midpoint_offset = (invalid_offset + valid_offset) / 2.0
-        if clockwise:
-            midpoint = (invalid_hue + midpoint_offset) % math.tau
-        else:
-            midpoint = (invalid_hue - midpoint_offset) % math.tau
-        if _hue_in_gamut(lightness, chroma, midpoint):
-            valid_offset = midpoint_offset
-        else:
-            invalid_offset = midpoint_offset
-
-    if clockwise:
-        return float((invalid_hue + valid_offset) % math.tau)
-    return float((invalid_hue - valid_offset) % math.tau)
-
-
-def _hue_in_gamut(lightness: float, chroma: float, hue: float) -> bool:
-    return bool(chroma <= color_math.max_chroma_for_lh(lightness, hue) + CHROMA_EPSILON)
-
-
 def _position_from_circle(normalized_radius: float, hue: float, size: Sequence[float]) -> Position | None:
     bounds = _size_bounds(size)
     if bounds is None:
@@ -637,19 +477,6 @@ def _size_bounds(size: Sequence[float]):
     if width <= 1.0 or height <= 1.0:
         return None
     return width, height
-
-
-def _radius_for_size(size: Sequence[float]) -> float:
-    width, height = (float(size[0]), float(size[1]))
-    return (min(width, height) - 1.0) / 2.0
-
-
-def _on_chroma_lightness_ring(normalized_radius, radius):
-    assert radius > 0.0
-    half_pixel_inner = 1.0 - CHROMA_LIGHTNESS_RING_HALF_WIDTH / radius
-    band_inner = 1.0 - chroma_lightness_band_width(radius) / radius
-    inner = min(half_pixel_inner, band_inner)
-    return normalized_radius >= max(0.0, inner)
 
 
 def _empty_color_grid(x):
