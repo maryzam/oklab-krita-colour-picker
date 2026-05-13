@@ -69,7 +69,9 @@ def _render_rgba_uncached(model: VectorizedSelectorModel, width: int, height: in
 
 
 def _render_cache_key(model: VectorizedSelectorModel, width: int, height: int) -> tuple:
-    if type(model).__name__ == "ChromaLightnessModel":
+    from oklab_colour_picker.selector_models import ChromaLightnessModel
+
+    if isinstance(model, ChromaLightnessModel):
         lightness = int(round(float(model.lightness) * _HUE_RING_LIGHTNESS_CACHE_SCALE))
         chroma = int(round(float(model.chroma) * _HUE_RING_CHROMA_CACHE_SCALE))
         return (type(model), lightness, chroma, width, height)

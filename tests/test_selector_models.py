@@ -162,6 +162,28 @@ def test_vectorized_selector_render_paths_do_not_use_halley_boundary_solver(monk
     assert valid.shape == (32, 32)
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        LightnessSliceModel(lightness=0.55),
+        HueLightnessSliceModel(chroma=0.05),
+        LightnessChromaSliceModel(hue=1.25),
+        ChromaLightnessModel(lightness=0.55, chroma=0.05),
+    ],
+)
+@pytest.mark.parametrize("size", [(33, 33), (48, 32)])
+def test_vectorized_selector_valid_masks_match_scalar_picker_semantics(model, size):
+    y, x = np.indices((size[1], size[0]), dtype=float)
+
+    _, actual = model.colors_at_positions(x, y, size)
+    expected = np.zeros((size[1], size[0]), dtype=bool)
+    for row in range(size[1]):
+        for column in range(size[0]):
+            expected[row, column] = model.color_at_position((column, row), size) is not None
+
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_lightness_chroma_slice_maps_x_to_absolute_chroma():
     model = LightnessChromaSliceModel(hue=1.25)
 

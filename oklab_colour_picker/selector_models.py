@@ -352,19 +352,25 @@ class ChromaLightnessModel:
             return _empty_color_grid(x), np.zeros_like(np.asarray(x), dtype=bool)
 
         normalized_radius, hue, circle_valid = geometry
-        oklch = np.stack(
+        ring = circle_valid & _on_chroma_lightness_ring(normalized_radius, _radius_for_size(size))
+        oklab = _empty_color_grid(x)
+        valid = np.zeros_like(ring, dtype=bool)
+        if not np.any(ring):
+            return oklab, valid
+
+        hue_used = hue[ring]
+        oklch_used = np.stack(
             (
-                np.full_like(normalized_radius, self.lightness, dtype=float),
-                np.full_like(normalized_radius, self.chroma, dtype=float),
-                hue,
+                np.full_like(hue_used, self.lightness, dtype=float),
+                np.full_like(hue_used, self.chroma, dtype=float),
+                hue_used,
             ),
             axis=-1,
         )
-        oklab = color_math.oklch_to_oklab(oklch)
-        valid = (
-            circle_valid
-            & _on_chroma_lightness_ring(normalized_radius, _radius_for_size(size))
-            & color_math.in_srgb_gamut(color_math.oklab_to_srgb(oklab), epsilon=1e-6)
+        oklab_used = color_math.oklch_to_oklab(oklch_used)
+        oklab[ring] = oklab_used
+        valid[ring] = color_math.in_srgb_gamut(
+            color_math.oklab_to_srgb(oklab_used), epsilon=1e-6
         )
         return oklab, valid
 

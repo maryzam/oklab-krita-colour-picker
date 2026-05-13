@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Callable, Protocol, Sequence
 
 import numpy as np
@@ -12,6 +13,7 @@ from oklab_colour_picker import color_math
 
 ForegroundListener = Callable[[np.ndarray], None]
 LOGGER = logging.getLogger(__name__)
+LOCAL_INTERACTION_SYNC_GRACE_SECONDS = 0.75
 
 
 class ForegroundAdapter(Protocol):
@@ -53,6 +55,7 @@ class ColourPickerController:
         foreground_timer: ForegroundTimer | None = None,
         foreground_poll_interval_ms: int = 250,
         initially_visible: bool = True,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._adapter = adapter
         self._scheduler = scheduler if scheduler is not None else ImmediateScheduler()
@@ -66,7 +69,8 @@ class ColourPickerController:
         self._commit_token = 0
         self._last_committed_token: int | None = None
         self._last_committed_colour: np.ndarray | None = None
-        self._ignore_next_external_sync = False
+        self._clock = clock
+        self._local_interaction_deadline: float | None = None
         self._dock_visible = bool(initially_visible)
 
         if self._dock_visible:
@@ -101,7 +105,8 @@ class ColourPickerController:
         """Set transient UI preview state without replacing any pending commit."""
 
         self._selected_colour = None if oklab is None else _as_oklab(oklab)
-        self._ignore_next_external_sync = oklab is not None
+        if oklab is not None:
+            self._extend_local_interaction_guard()
 
     def request_foreground_commit(self, oklab: Sequence[float] | None) -> None:
         if oklab is None:
@@ -112,7 +117,7 @@ class ColourPickerController:
             self._selection_before_pending_commit = None if self._selected_colour is None else self._selected_colour.copy()
         self._selected_colour = colour
         self._pending_commit = colour
-        self._ignore_next_external_sync = True
+        self._extend_local_interaction_guard()
         if self._commit_scheduled:
             return
 
@@ -122,8 +127,7 @@ class ColourPickerController:
     def sync_external_foreground(self) -> bool:
         if not self._dock_visible:
             return False
-        if self._pending_commit is None and not self._commit_scheduled and self._ignore_next_external_sync:
-            self._ignore_next_external_sync = False
+        if self._local_interaction_blocks_external_sync():
             return False
 
         foreground = self._adapter.get_foreground()
@@ -132,13 +136,6 @@ class ColourPickerController:
 
         colour = _as_oklab(foreground)
         normalized = normalize_oklab_for_krita(colour)
-        if self._pending_commit is not None or self._commit_scheduled:
-            before_pending = self._selection_before_pending_commit
-            before_normalized = (
-                None if before_pending is None else normalize_oklab_for_krita(before_pending)
-            )
-            if before_normalized is not None and _quantized_equal(before_normalized, normalized):
-                return False
         if self._is_self_feedback(normalized):
             return False
         selected_normalized = None if self._selected_colour is None else normalize_oklab_for_krita(self._selected_colour)
@@ -178,7 +175,7 @@ class ColourPickerController:
         self._pending_commit = None
         selection_before_commit = self._selection_before_pending_commit
         self._selection_before_pending_commit = None
-        self._ignore_next_external_sync = False
+        self._local_interaction_deadline = None
         if colour is None:
             return
 
@@ -203,6 +200,19 @@ class ColourPickerController:
             and self._last_committed_colour is not None
             and _quantized_equal(normalized_colour, self._last_committed_colour)
         )
+
+    def _extend_local_interaction_guard(self) -> None:
+        self._local_interaction_deadline = self._clock() + LOCAL_INTERACTION_SYNC_GRACE_SECONDS
+
+    def _local_interaction_blocks_external_sync(self) -> bool:
+        if self._pending_commit is not None or self._commit_scheduled:
+            return True
+        if self._local_interaction_deadline is None:
+            return False
+        if self._clock() < self._local_interaction_deadline:
+            return True
+        self._local_interaction_deadline = None
+        return False
 
 
 def normalize_oklab_for_krita(oklab: Sequence[float]) -> np.ndarray:

@@ -160,6 +160,8 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         if index < self._tabs.count():
             current_index = self._tabs.currentIndex()
             placeholder = self._tabs.widget(index)
+            # Replacing the placeholder may re-emit currentChanged; the
+            # existing-widget early return above keeps that re-entry harmless.
             self._tabs.removeTab(index)
             self._tabs.insertTab(index, widget, MODE_LABELS[mode])
             if placeholder is not None:
