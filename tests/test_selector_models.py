@@ -171,7 +171,17 @@ def test_vectorized_selector_render_paths_do_not_use_halley_boundary_solver(monk
         ChromaLightnessModel(lightness=0.55, chroma=0.05),
     ],
 )
-@pytest.mark.parametrize("size", [(33, 33), (48, 32)])
+@pytest.mark.parametrize(
+    "size",
+    [
+        (33, 33),
+        (48, 32),
+        # Fixed-seed, non-square sizes harden the strict mask parity check
+        # without making collection depend on runtime randomness.
+        (58, 71),
+        (50, 34),
+    ],
+)
 def test_vectorized_selector_valid_masks_match_scalar_picker_semantics(model, size):
     y, x = np.indices((size[1], size[0]), dtype=float)
 
