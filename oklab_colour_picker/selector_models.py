@@ -118,6 +118,20 @@ class LightnessSliceModel:
         chroma = max(0.0, min(desired_chroma, max_chroma))
         return color_math.oklch_to_oklab([self.lightness, chroma, hue])
 
+    def desired_position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
+        _, chroma, hue = color_math.oklab_to_oklch(oklab)
+        if chroma > color_math.SRGB_MAX_CHROMA + CHROMA_EPSILON:
+            return None
+        normalized_radius = float(np.clip(chroma / color_math.SRGB_MAX_CHROMA, 0.0, 1.0))
+        return _position_from_circle(normalized_radius, hue, size)
+
+    def snapped_position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
+        _, chroma, hue = color_math.oklab_to_oklch(oklab)
+        max_chroma = float(color_math.max_chroma_for_lh(self.lightness, hue))
+        clamped = max(0.0, min(float(chroma), max_chroma))
+        normalized_radius = float(np.clip(clamped / color_math.SRGB_MAX_CHROMA, 0.0, 1.0))
+        return _position_from_circle(normalized_radius, hue, size)
+
 
 @dataclass(frozen=True)
 class LightnessChromaSliceModel:
@@ -215,6 +229,42 @@ class LightnessChromaSliceModel:
         chroma = max(0.0, min(desired_chroma, max_chroma))
         return color_math.oklch_to_oklab([lightness, chroma, self.hue])
 
+    def desired_position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
+        bounds = _size_bounds(size)
+        if bounds is None:
+            return None
+        width, height = bounds
+        lightness, chroma, _ = color_math.oklab_to_oklch(oklab)
+        if not -LIGHTNESS_EPSILON <= lightness <= 1.0 + LIGHTNESS_EPSILON:
+            return None
+        if not _on_hue_plane(oklab, self.hue):
+            return None
+        if chroma > color_math.SRGB_MAX_CHROMA + CHROMA_EPSILON:
+            return None
+        lightness = float(np.clip(lightness, 0.0, 1.0))
+        chroma_fraction = float(np.clip(float(chroma) / color_math.SRGB_MAX_CHROMA, 0.0, 1.0))
+        return (
+            float(chroma_fraction * (width - 1.0)),
+            float((1.0 - lightness) * (height - 1.0)),
+        )
+
+    def snapped_position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
+        bounds = _size_bounds(size)
+        if bounds is None:
+            return None
+        width, height = bounds
+        lightness, chroma, _ = color_math.oklab_to_oklch(oklab)
+        if not _on_hue_plane(oklab, self.hue):
+            return None
+        lightness = float(np.clip(lightness, 0.0, 1.0))
+        max_chroma = float(color_math.max_chroma_for_lh(lightness, self.hue))
+        clamped = max(0.0, min(float(chroma), max_chroma))
+        chroma_fraction = float(np.clip(clamped / color_math.SRGB_MAX_CHROMA, 0.0, 1.0))
+        return (
+            float(chroma_fraction * (width - 1.0)),
+            float((1.0 - lightness) * (height - 1.0)),
+        )
+
 
 @dataclass(frozen=True)
 class HueLightnessSliceModel:
@@ -304,6 +354,31 @@ class HueLightnessSliceModel:
         if lightness is None:
             return None
         return color_math.oklch_to_oklab([lightness, self.chroma, hue])
+
+    def desired_position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
+        bounds = _size_bounds(size)
+        if bounds is None:
+            return None
+        width, height = bounds
+        lightness, _, hue = color_math.oklab_to_oklch(oklab)
+        if not -LIGHTNESS_EPSILON <= lightness <= 1.0 + LIGHTNESS_EPSILON:
+            return None
+        lightness = float(np.clip(lightness, 0.0, 1.0))
+        hue = float(hue % math.tau)
+        return _position_from_circle(1.0 - lightness, hue, (width, height))
+
+    def snapped_position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
+        bounds = _size_bounds(size)
+        if bounds is None:
+            return None
+        width, height = bounds
+        lightness, _, hue = color_math.oklab_to_oklch(oklab)
+        hue = float(hue % math.tau)
+        lightness = float(np.clip(lightness, 0.0, 1.0))
+        snapped = _snap_lightness_to_gamut(self.chroma, hue, lightness)
+        if snapped is None:
+            return None
+        return _position_from_circle(1.0 - snapped, hue, (width, height))
 
 
 def _circle_geometry(position: Sequence[float], size: Sequence[float]):

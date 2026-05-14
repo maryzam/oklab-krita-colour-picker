@@ -377,3 +377,43 @@ def _send_mouse(widget, event_type, position):
     )
     QtWidgets.QApplication.sendEvent(widget, event)
     assert event.isAccepted()
+
+
+def test_axis_track_hue_chroma_floor_lifts_neutral_colors():
+    # At chroma=0 every column collapses to grey; the floor must paint a
+    # visibly colourful track instead while gamut classification stays at the
+    # actual chroma (so no checker should appear here).
+    flat = renderers.render_axis_track(
+        renderers.AXIS_H,
+        (0.5, 0.0),
+        color_math.SRGB_MAX_CHROMA,
+        (64, 8),
+    )
+    floored = renderers.render_axis_track(
+        renderers.AXIS_H,
+        (0.5, 0.0),
+        color_math.SRGB_MAX_CHROMA,
+        (64, 8),
+        hue_chroma_floor=0.08,
+    )
+    # Flat rail is monochrome: identical RGB across all columns.
+    assert np.all(flat[..., 0] == flat[0, 0, 0])
+    assert np.all(flat[..., 1] == flat[0, 0, 1])
+    assert np.all(flat[..., 2] == flat[0, 0, 2])
+    # Floored rail has multiple distinct hues across columns.
+    unique_cols = {tuple(floored[0, x, :3]) for x in range(floored.shape[1])}
+    assert len(unique_cols) > 8
+
+
+def test_axis_track_hue_chroma_floor_preserves_actual_gamut_classification():
+    # Pick a chroma above the actual cusp for L=0.5 so some columns are OOG
+    # without any floor. The floor must not hide those OOG columns.
+    rgba = renderers.render_axis_track(
+        renderers.AXIS_H,
+        (0.5, color_math.SRGB_MAX_CHROMA * 0.95),
+        color_math.SRGB_MAX_CHROMA,
+        (256, 12),
+        hue_chroma_floor=0.001,
+    )
+    has_dark_tile = np.any(np.all(rgba[..., :3] == 120, axis=-1))
+    assert has_dark_tile

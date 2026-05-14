@@ -37,6 +37,13 @@ _HANDLE_BORDER = 2
 _SWATCH_HEIGHT = 48
 _CORNER_BUTTON_SIZE = 20
 
+# Minimum chroma used when *rendering* the H slider rail. The hue track sweeps
+# all hues at the current (L, C); for near-neutral colours every column
+# collapses to the same grey, which makes the rail unreadable as a hue picker.
+# We floor the rendering chroma to keep the rail colourful while the OOG
+# checker continues to reflect the actual selected chroma.
+_H_TRACK_CHROMA_FLOOR = 0.06
+
 
 def oklab_to_hex(oklab: Sequence[float]) -> str:
     """Return ``#rrggbb`` for the OKLab colour, clipping to sRGB if needed."""
@@ -98,6 +105,7 @@ class _GradientSlider(QtWidgets.QSlider):
         self._track_image: QtGui.QImage | None = None
         self._track_buffer: np.ndarray | None = None
         self._track_cache_key: tuple | None = None
+        self._fallback_colour: QtGui.QColor | None = None
 
     def set_track(self, rgba: np.ndarray) -> None:
         self._track_buffer = rgba
@@ -116,6 +124,18 @@ class _GradientSlider(QtWidgets.QSlider):
 
     def set_cache_key(self, key: tuple | None) -> None:
         self._track_cache_key = key
+
+    def set_fallback_colour(self, colour: QtGui.QColor | None) -> None:
+        # The fallback colour fills the inside of the hollow handle so it
+        # always shows the clipped sRGB colour the user will actually paint
+        # with. When the handle sits over an in-gamut track pixel the fill
+        # matches the track underneath; over the OOG checker it shows the
+        # solid clipped colour, making the fallback visible.
+        if colour is None:
+            self._fallback_colour = None
+        else:
+            self._fallback_colour = QtGui.QColor(colour)
+        self.update()
 
     def _track_rect(self) -> QtCore.QRect:
         # Reserve a little horizontal padding so the handle never paints past
@@ -156,6 +176,14 @@ class _GradientSlider(QtWidgets.QSlider):
             self.rect().height() - 1,
         )
         ink = self._border_ink(x, track_rect)
+        if self._fallback_colour is not None:
+            # Fill inside the border so OOG handles show a solid sample of the
+            # clipped colour over the checker.
+            inner = QtCore.QRectF(handle_rect).adjusted(
+                _HANDLE_BORDER, _HANDLE_BORDER, -_HANDLE_BORDER, -_HANDLE_BORDER
+            )
+            if inner.width() > 0 and inner.height() > 0:
+                painter.fillRect(inner, self._fallback_colour)
         pen = QtGui.QPen(ink, _HANDLE_BORDER)
         pen.setJoinStyle(QtCore.Qt.MiterJoin)
         painter.setPen(pen)
@@ -597,8 +625,16 @@ class ReadoutPanel(QtWidgets.QWidget):
             self._swatch.set_colour(oklab)
             self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
             self._refresh_tracks(float(l), float(c), float(h))
+            self._refresh_handle_fallback(oklab)
         finally:
             self._syncing = False
+
+    def _refresh_handle_fallback(self, oklab: np.ndarray) -> None:
+        srgb = color_math.clip_srgb(color_math.oklab_to_srgb(np.asarray(oklab, dtype=float)))
+        r, g, b = (int(round(float(c) * 255.0)) for c in srgb)
+        colour = QtGui.QColor(r, g, b)
+        for row in (self._row_l, self._row_c, self._row_h):
+            row.slider.set_fallback_colour(colour)
 
     def _refresh_tracks(self, lightness: float, chroma: float, hue: float) -> None:
         # Track widths can be 0 before the widget is laid out; skip then and
@@ -611,11 +647,23 @@ class ReadoutPanel(QtWidgets.QWidget):
             slider = row.slider
             width = max(2, slider.width() - _HANDLE_WIDTH)
             height = max(2, slider.height() - 4)
-            key = (axis, round(fixed[0], 4), round(fixed[1], 4), width, height)
+            chroma_floor = _H_TRACK_CHROMA_FLOOR if axis == renderers.AXIS_H else 0.0
+            key = (
+                axis,
+                round(fixed[0], 4),
+                round(fixed[1], 4),
+                width,
+                height,
+                chroma_floor,
+            )
             if slider.cache_key() == key:
                 continue
             rgba = renderers.render_axis_track(
-                axis, fixed, color_math.SRGB_MAX_CHROMA, (width, height)
+                axis,
+                fixed,
+                color_math.SRGB_MAX_CHROMA,
+                (width, height),
+                hue_chroma_floor=chroma_floor,
             )
             slider.set_track(rgba)
             slider.set_cache_key(key)
