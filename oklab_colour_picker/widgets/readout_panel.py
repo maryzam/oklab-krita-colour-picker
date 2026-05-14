@@ -700,6 +700,7 @@ class ReadoutPanel(QtWidgets.QWidget):
             self._swatch.set_colour(oklab)
             self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
             self._refresh_tracks(lightness, chroma, hue_rad)
+            self._refresh_handle_fallback(oklab)
         finally:
             self._syncing = False
         (self.committed if committed else self.previewed).emit(oklab)

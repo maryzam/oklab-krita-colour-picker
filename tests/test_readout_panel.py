@@ -120,6 +120,25 @@ def test_readout_panel_round_trips_through_sliders(qtbot):
     assert panel._row_h.value() == pytest.approx(245.0, abs=0.5)
 
 
+def test_readout_panel_slider_edit_updates_handle_fallback(qtbot):
+    # Direct slider interaction goes through _emit_from_lch, not
+    # set_current_colour. The handle fallback colour must still update so the
+    # OOG handle fill stays in sync with the colour the panel just emitted.
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+    panel.resize(320, 200)
+    panel.set_current_colour(color_math.oklch_to_oklab([0.5, 0.05, 0.0]))
+
+    panel._row_h.valueChanged.emit(180.0, True)
+
+    target = color_math.oklch_to_oklab([0.5, 0.05, math.radians(180.0)])
+    srgb = color_math.clip_srgb(color_math.oklab_to_srgb(target))
+    expected = tuple(int(round(float(c) * 255.0)) for c in srgb)
+    fallback = panel._row_h.slider._fallback_colour
+    assert fallback is not None
+    assert (fallback.red(), fallback.green(), fallback.blue()) == expected
+
+
 def test_readout_slider_click_jumps_to_clicked_position(qtbot):
     panel = ReadoutPanel()
     panel.resize(320, 200)
