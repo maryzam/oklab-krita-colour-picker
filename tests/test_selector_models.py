@@ -379,3 +379,91 @@ def test_hue_lightness_slice_rejects_color_with_mismatched_chroma():
     color = color_math.oklch_to_oklab([0.5, 0.06, math.pi / 2.0])
 
     assert model.position_for_color(color, (101.0, 101.0)) is None
+
+
+# -- fallback indicator helpers --------------------------------------------
+
+
+def test_lightness_slice_desired_position_returns_out_of_leaf_location():
+    # At L=0.5, hue=0 the cusp chroma is below SRGB_MAX_CHROMA, so a colour at
+    # SRGB_MAX_CHROMA is OOG on this slice and position_for_color returns None.
+    model = LightnessSliceModel(lightness=0.5)
+    oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
+    assert model.position_for_color(oklab, (101.0, 101.0)) is None
+
+    desired = model.desired_position_for_color(oklab, (101.0, 101.0))
+    assert desired is not None
+    # Hue=0 lands on the +x rim of the disk.
+    np.testing.assert_allclose(desired, (100.0, 50.0), atol=1e-9)
+
+
+def test_lightness_slice_snapped_position_clamps_chroma_to_leaf():
+    model = LightnessSliceModel(lightness=0.5)
+    oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
+    snapped = model.snapped_position_for_color(oklab, (101.0, 101.0))
+    assert snapped is not None
+    # The snapped position must be strictly inside the rim, since the cusp
+    # chroma at L=0.5, hue=0 is well below SRGB_MAX_CHROMA.
+    assert 50.0 < snapped[0] < 100.0
+    assert snapped[1] == pytest.approx(50.0, abs=1e-9)
+
+
+def test_lightness_chroma_slice_desired_and_snapped_for_oog_chroma():
+    model = LightnessChromaSliceModel(hue=0.0)
+    oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
+    assert model.position_for_color(oklab, (101.0, 101.0)) is None
+
+    desired = model.desired_position_for_color(oklab, (101.0, 101.0))
+    assert desired is not None
+    np.testing.assert_allclose(desired, (100.0, 50.0), atol=1e-9)
+
+    snapped = model.snapped_position_for_color(oklab, (101.0, 101.0))
+    assert snapped is not None
+    assert 0.0 <= snapped[0] < 100.0
+    assert snapped[1] == pytest.approx(50.0, abs=1e-9)
+
+
+def test_hue_lightness_slice_snapped_position_pulls_back_into_gamut():
+    # At chroma=0.2, hue=0 the gamut leaf is narrow in L; extreme L values are
+    # OOG so position_for_color returns None and snapped pulls the marker into
+    # the valid lightness band.
+    chroma = 0.2
+    hue = 0.0
+    model = HueLightnessSliceModel(chroma=chroma)
+    oklab = color_math.oklch_to_oklab([0.05, chroma, hue])
+    assert model.position_for_color(oklab, (101.0, 101.0)) is None
+
+    snapped = model.snapped_position_for_color(oklab, (101.0, 101.0))
+    assert snapped is not None
+    # Hue=0 puts the marker along +x from centre. The snapped lightness must be
+    # closer to the centre than the requested L=0.05 (which would lie near the
+    # rim at the equivalent normalized radius = 0.95).
+    cx, cy = 50.0, 50.0
+    snapped_radius = math.hypot(snapped[0] - cx, cy - snapped[1])
+    desired_radius = (1.0 - 0.05) * 50.0
+    assert snapped_radius < desired_radius
+
+
+def test_lightness_slice_helpers_reject_mismatched_lightness():
+    model = LightnessSliceModel(lightness=0.5)
+    # Colour sits on a different lightness slice; both helpers must reject it
+    # so the widget does not paint a stale indicator on the wrong slice.
+    oklab = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
+    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None
+
+
+def test_hue_lightness_slice_helpers_reject_mismatched_chroma():
+    model = HueLightnessSliceModel(chroma=0.05)
+    # Colour at a different chroma than this fixed-chroma slice.
+    oklab = color_math.oklch_to_oklab([0.5, 0.10, 0.0])
+    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None
+
+
+def test_lightness_chroma_slice_helpers_reject_mismatched_hue():
+    model = LightnessChromaSliceModel(hue=0.0)
+    # Colour on a perpendicular hue plane.
+    oklab = color_math.oklch_to_oklab([0.5, 0.05, math.pi / 2.0])
+    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None

@@ -126,6 +126,8 @@ def render_axis_track(
     fixed: tuple[float, float],
     chroma_max: float,
     size: Sequence[int],
+    *,
+    hue_chroma_floor: float = 0.0,
 ) -> np.ndarray:
     """Render an OKLCh axis gradient bar with out-of-gamut regions hatched.
 
@@ -139,13 +141,26 @@ def render_axis_track(
     ``chroma_max`` is the C-axis full-scale value (typically
     ``color_math.SRGB_MAX_CHROMA``); ignored for L and H axes.
 
+    ``hue_chroma_floor`` applies only to ``AXIS_H``: when the current chroma is
+    below this floor, the rail is *rendered* at the floor so the hue sweep
+    stays colourful for near-neutral colours. Gamut classification still uses
+    the real fixed chroma, so the out-of-gamut checker reflects the actual
+    selected colour, not the rendering floor.
+
     Returns a ``(height, width, 4)`` uint8 RGBA buffer.
     """
 
     width, height = _validate_size(size)
     swept = _swept_values(axis, width, chroma_max)
     oklch = _oklch_grid(axis, fixed, swept, height, width)
-    in_gamut, srgb8 = _classify_track_pixels(oklch)
+    if axis == AXIS_H and hue_chroma_floor > float(fixed[1]):
+        display_oklch = _oklch_grid(
+            axis, (float(fixed[0]), float(hue_chroma_floor)), swept, height, width
+        )
+        in_gamut, _ = _classify_track_pixels(oklch)
+        _, srgb8 = _classify_track_pixels(display_oklch)
+    else:
+        in_gamut, srgb8 = _classify_track_pixels(oklch)
     return _compose_track_rgba(srgb8, in_gamut, width, height)
 
 

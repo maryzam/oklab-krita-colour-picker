@@ -256,18 +256,63 @@ class SelectorWidget(QtWidgets.QWidget):
             self.committed.emit(self._selected_colour.copy())
 
     def _paint_indicator(self, painter: QtGui.QPainter) -> None:
-        position = self.indicator_position()
-        if position is None:
+        desired = self._desired_indicator_position()
+        snapped = self._snapped_indicator_position()
+        if desired is None and snapped is None:
             return
 
-        x, y = position
-        outer = QtCore.QPointF(x, y)
         painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
         painter.setBrush(QtCore.Qt.NoBrush)
-        painter.setPen(QtGui.QPen(QtCore.Qt.black, 3.0))
-        painter.drawEllipse(outer, 5.0, 5.0)
-        painter.setPen(QtGui.QPen(QtCore.Qt.white, 1.5))
-        painter.drawEllipse(outer, 5.0, 5.0)
+
+        if desired is not None and snapped is not None and not _positions_close(desired, snapped):
+            # Out of gamut on this slice: solid ring at the desired position
+            # (where the stored colour wants to be), dashed ring at the
+            # snapped fallback position the user will actually paint with.
+            self._stroke_circle(painter, desired, solid=True)
+            self._stroke_circle(painter, snapped, solid=False)
+            return
+
+        position = desired if desired is not None else snapped
+        self._stroke_circle(painter, position, solid=True)
+
+    def _desired_indicator_position(self) -> tuple[float, float] | None:
+        if self._selected_colour is None:
+            return None
+        helper = getattr(self._model, "desired_position_for_color", None)
+        if callable(helper):
+            return helper(self._selected_colour, _widget_size(self))
+        return self._model.position_for_color(self._selected_colour, _widget_size(self))
+
+    def _snapped_indicator_position(self) -> tuple[float, float] | None:
+        if self._selected_colour is None:
+            return None
+        helper = getattr(self._model, "snapped_position_for_color", None)
+        if callable(helper):
+            return helper(self._selected_colour, _widget_size(self))
+        return self._model.position_for_color(self._selected_colour, _widget_size(self))
+
+    def _stroke_circle(
+        self, painter: QtGui.QPainter, position: tuple[float, float], *, solid: bool
+    ) -> None:
+        x, y = position
+        center = QtCore.QPointF(x, y)
+        if solid:
+            painter.setPen(QtGui.QPen(QtCore.Qt.black, 3.0))
+            painter.drawEllipse(center, 5.0, 5.0)
+            painter.setPen(QtGui.QPen(QtCore.Qt.white, 1.5))
+            painter.drawEllipse(center, 5.0, 5.0)
+            return
+        # Dashed ring: dark halo first, then a white dashed stroke on top.
+        halo = QtGui.QPen(QtCore.Qt.black, 3.0)
+        halo.setStyle(QtCore.Qt.DashLine)
+        halo.setDashPattern([2.0, 2.0])
+        painter.setPen(halo)
+        painter.drawEllipse(center, 5.0, 5.0)
+        dash = QtGui.QPen(QtCore.Qt.white, 1.5)
+        dash.setStyle(QtCore.Qt.DashLine)
+        dash.setDashPattern([2.0, 2.0])
+        painter.setPen(dash)
+        painter.drawEllipse(center, 5.0, 5.0)
 
     def _selector_image(self) -> QtGui.QImage:
         key = (self._model, self.width(), self.height())
@@ -305,6 +350,10 @@ def _as_oklab(oklab: Sequence[float] | None) -> np.ndarray | None:
     if colour.shape != (3,):
         raise ValueError("OKLab colour must contain exactly three components")
     return colour.copy()
+
+
+def _positions_close(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    return abs(a[0] - b[0]) <= 0.5 and abs(a[1] - b[1]) <= 0.5
 
 
 def _keyboard_step(size: QtCore.QSize, modifiers: QtCore.Qt.KeyboardModifiers) -> int:
