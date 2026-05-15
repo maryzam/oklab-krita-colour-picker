@@ -442,3 +442,28 @@ def test_hue_lightness_slice_snapped_position_pulls_back_into_gamut():
     snapped_radius = math.hypot(snapped[0] - cx, cy - snapped[1])
     desired_radius = (1.0 - 0.05) * 50.0
     assert snapped_radius < desired_radius
+
+
+def test_lightness_slice_helpers_reject_mismatched_lightness():
+    model = LightnessSliceModel(lightness=0.5)
+    # Colour sits on a different lightness slice; both helpers must reject it
+    # so the widget does not paint a stale indicator on the wrong slice.
+    oklab = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
+    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None
+
+
+def test_hue_lightness_slice_helpers_reject_mismatched_chroma():
+    model = HueLightnessSliceModel(chroma=0.05)
+    # Colour at a different chroma than this fixed-chroma slice.
+    oklab = color_math.oklch_to_oklab([0.5, 0.10, 0.0])
+    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None
+
+
+def test_lightness_chroma_slice_helpers_reject_mismatched_hue():
+    model = LightnessChromaSliceModel(hue=0.0)
+    # Colour on a perpendicular hue plane.
+    oklab = color_math.oklch_to_oklab([0.5, 0.05, math.pi / 2.0])
+    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None

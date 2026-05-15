@@ -119,14 +119,18 @@ class LightnessSliceModel:
         return color_math.oklch_to_oklab([self.lightness, chroma, hue])
 
     def desired_position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
-        _, chroma, hue = color_math.oklab_to_oklch(oklab)
+        lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
+        if abs(lightness - self.lightness) > LIGHTNESS_EPSILON:
+            return None
         if chroma > color_math.SRGB_MAX_CHROMA + CHROMA_EPSILON:
             return None
         normalized_radius = float(np.clip(chroma / color_math.SRGB_MAX_CHROMA, 0.0, 1.0))
         return _position_from_circle(normalized_radius, hue, size)
 
     def snapped_position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> Position | None:
-        _, chroma, hue = color_math.oklab_to_oklch(oklab)
+        lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
+        if abs(lightness - self.lightness) > LIGHTNESS_EPSILON:
+            return None
         max_chroma = float(color_math.max_chroma_for_lh(self.lightness, hue))
         clamped = max(0.0, min(float(chroma), max_chroma))
         normalized_radius = float(np.clip(clamped / color_math.SRGB_MAX_CHROMA, 0.0, 1.0))
@@ -360,7 +364,9 @@ class HueLightnessSliceModel:
         if bounds is None:
             return None
         width, height = bounds
-        lightness, _, hue = color_math.oklab_to_oklch(oklab)
+        lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
+        if abs(chroma - self.chroma) > CHROMA_EPSILON:
+            return None
         if not -LIGHTNESS_EPSILON <= lightness <= 1.0 + LIGHTNESS_EPSILON:
             return None
         lightness = float(np.clip(lightness, 0.0, 1.0))
@@ -372,7 +378,9 @@ class HueLightnessSliceModel:
         if bounds is None:
             return None
         width, height = bounds
-        lightness, _, hue = color_math.oklab_to_oklch(oklab)
+        lightness, chroma, hue = color_math.oklab_to_oklch(oklab)
+        if abs(chroma - self.chroma) > CHROMA_EPSILON:
+            return None
         hue = float(hue % math.tau)
         lightness = float(np.clip(lightness, 0.0, 1.0))
         snapped = _snap_lightness_to_gamut(self.chroma, hue, lightness)
