@@ -37,6 +37,7 @@ class SelectorWidget(QtWidgets.QWidget):
         self._selected_colour: np.ndarray | None = None
         self._colour_before_drag: np.ndarray | None = None
         self._last_valid_drag_colour: np.ndarray | None = None
+        self._last_interaction_position: tuple[float, float] | None = None
         self._image_cache_key: tuple[SelectorModel, int, int] | None = None
         self._image_cache_buffer: np.ndarray | None = None
         self._image_cache: QtGui.QImage | None = None
@@ -58,16 +59,21 @@ class SelectorWidget(QtWidgets.QWidget):
         if self._model is model:
             return
         self._model = model
+        self._last_interaction_position = None
         self._clear_image_cache()
         self.update()
 
     def set_selected_colour(self, oklab: Sequence[float] | None) -> None:
         self._selected_colour = _as_oklab(oklab)
+        self._last_interaction_position = None
         self.update()
 
     def indicator_position(self) -> tuple[float, float] | None:
         if self._selected_colour is None:
             return None
+        override = self._interaction_indicator_position()
+        if override is not None:
+            return override
         return self._model.position_for_color(self._selected_colour, _widget_size(self))
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
@@ -111,6 +117,7 @@ class SelectorWidget(QtWidgets.QWidget):
         self._pressed = False
         if colour is not None:
             self._selected_colour = colour.copy()
+            self._record_interaction_position(event.pos(), colour)
             self.update()
             self.committed.emit(colour.copy())
         elif self._last_valid_drag_colour is not None:
@@ -119,6 +126,7 @@ class SelectorWidget(QtWidgets.QWidget):
             self.committed.emit(self._last_valid_drag_colour.copy())
         else:
             self._selected_colour = self._colour_before_drag
+            self._last_interaction_position = None
             self.update()
             self.previewed.emit(None if self._selected_colour is None else self._selected_colour.copy())
         self._colour_before_drag = None
@@ -145,6 +153,7 @@ class SelectorWidget(QtWidgets.QWidget):
             return
 
         self._selected_colour = colour.copy()
+        self._record_interaction_position(point, colour)
         self._keyboard_commit_pending = True
         self.update()
         self.previewed.emit(colour.copy())
@@ -165,6 +174,7 @@ class SelectorWidget(QtWidgets.QWidget):
         colour = self._drag_colour_at(point) if self._pressed else self._colour_at(point)
         if colour is not None:
             self._selected_colour = colour.copy()
+            self._record_interaction_position(point, colour)
             if self._pressed:
                 self._last_valid_drag_colour = self._selected_colour.copy()
             self.update()
@@ -177,6 +187,7 @@ class SelectorWidget(QtWidgets.QWidget):
             return
 
         self._selected_colour = None
+        self._last_interaction_position = None
         self.update()
         self.previewed.emit(None)
 
@@ -256,6 +267,13 @@ class SelectorWidget(QtWidgets.QWidget):
             self.committed.emit(self._selected_colour.copy())
 
     def _paint_indicator(self, painter: QtGui.QPainter) -> None:
+        override = self._interaction_indicator_position()
+        if override is not None:
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            painter.setBrush(QtCore.Qt.NoBrush)
+            self._stroke_circle(painter, override, solid=True)
+            return
+
         desired = self._desired_indicator_position()
         snapped = self._snapped_indicator_position()
         if desired is None and snapped is None:
@@ -274,6 +292,23 @@ class SelectorWidget(QtWidgets.QWidget):
 
         position = desired if desired is not None else snapped
         self._stroke_circle(painter, position, solid=True)
+
+    def _record_interaction_position(self, point: QtCore.QPoint, colour: np.ndarray) -> None:
+        # Only trust the click point as the indicator location when the model
+        # picks the same colour directly from that point. Drag snaps past the
+        # gamut leaf return colours that don't live at the cursor — there we
+        # let the model decide where to draw the indicator.
+        direct = self._colour_at(point)
+        if direct is not None and np.array_equal(direct, colour):
+            self._last_interaction_position = (float(point.x()), float(point.y()))
+        else:
+            self._last_interaction_position = None
+
+    def _interaction_indicator_position(self) -> tuple[float, float] | None:
+        # The recorded position is invalidated whenever the colour changes
+        # outside of direct user interaction (see set_selected_colour /
+        # set_model), so it is safe to use without re-verifying here.
+        return self._last_interaction_position
 
     def _desired_indicator_position(self) -> tuple[float, float] | None:
         if self._selected_colour is None:
