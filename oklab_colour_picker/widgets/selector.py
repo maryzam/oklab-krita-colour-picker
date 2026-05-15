@@ -64,8 +64,16 @@ class SelectorWidget(QtWidgets.QWidget):
         self.update()
 
     def set_selected_colour(self, oklab: Sequence[float] | None) -> None:
-        self._selected_colour = _as_oklab(oklab)
-        self._last_interaction_position = None
+        new_colour = _as_oklab(oklab)
+        # The dock loops set_selected_colour back to the source widget on
+        # every previewed/committed signal, so we must keep the recorded
+        # interaction position whenever it still resolves to the new colour
+        # under the current model. Otherwise on achromatic slices the
+        # override is cleared between click and repaint and the indicator
+        # falls back to the model's hue=0 round-trip.
+        if not self._interaction_position_resolves_to(new_colour):
+            self._last_interaction_position = None
+        self._selected_colour = new_colour
         self.update()
 
     def indicator_position(self) -> tuple[float, float] | None:
@@ -303,6 +311,13 @@ class SelectorWidget(QtWidgets.QWidget):
             self._last_interaction_position = (float(point.x()), float(point.y()))
         else:
             self._last_interaction_position = None
+
+    def _interaction_position_resolves_to(self, colour: np.ndarray | None) -> bool:
+        if self._last_interaction_position is None or colour is None:
+            return False
+        x, y = self._last_interaction_position
+        direct = self._model.color_at_position((x, y), _widget_size(self))
+        return direct is not None and np.array_equal(direct, colour)
 
     def _interaction_indicator_position(self) -> tuple[float, float] | None:
         # The recorded position is invalidated whenever the colour changes

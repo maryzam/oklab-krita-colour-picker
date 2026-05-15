@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PyQt5")
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 import oklab_colour_picker
 from oklab_colour_picker import color_math
@@ -107,6 +107,42 @@ def test_selector_signals_update_controller_and_sibling_indicators(qtbot):
     np.testing.assert_allclose(controller.commits[-1], colour)
     for widget in panel.selector_widgets:
         np.testing.assert_allclose(widget.selected_colour, colour)
+
+
+def test_click_on_achromatic_hue_lightness_slice_keeps_indicator_at_click(qtbot):
+    # The dock loops set_selected_colour back to the source widget after
+    # every previewed/committed signal. On a chroma=0 hue/lightness disk the
+    # picked OKLab is greyscale, so model.position_for_color cannot recover
+    # the click angle; the indicator must still report the click point
+    # rather than snapping to the model's hue=0 fallback.
+    grey = color_math.oklch_to_oklab([0.5, 0.0, 0.0])
+    controller = FakeController(selected_colour=grey)
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    panel.set_mode(SelectorMode.HUE_LIGHTNESS_SLICE)
+    active = panel.active_selector
+    active.resize(121, 121)
+
+    click = QtCore.QPoint(60, 20)
+    expected_colour = active.model.color_at_position(
+        (click.x(), click.y()), (active.width(), active.height())
+    )
+    assert expected_colour is not None
+
+    press = QtGui.QMouseEvent(
+        QtCore.QEvent.MouseButtonPress, click, QtCore.Qt.LeftButton,
+        QtCore.Qt.LeftButton, QtCore.Qt.NoModifier,
+    )
+    release = QtGui.QMouseEvent(
+        QtCore.QEvent.MouseButtonRelease, click, QtCore.Qt.LeftButton,
+        QtCore.Qt.NoButton, QtCore.Qt.NoModifier,
+    )
+    QtCore.QCoreApplication.sendEvent(active, press)
+    QtCore.QCoreApplication.sendEvent(active, release)
+
+    indicator = active.indicator_position()
+    assert indicator is not None
+    assert indicator == pytest.approx((float(click.x()), float(click.y())))
 
 
 def test_preview_reuses_equal_selector_models(qtbot):
