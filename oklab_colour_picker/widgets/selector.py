@@ -141,6 +141,12 @@ class SelectorWidget(QtWidgets.QWidget):
         self._last_valid_drag_colour = None
         event.accept()
 
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        # The interaction override is stored in absolute widget pixels, so it
+        # is meaningless under a new size — drop it and let the model decide.
+        self._last_interaction_position = None
+        super().resizeEvent(event)
+
     def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:
         self._flush_keyboard_commit()
         super().focusOutEvent(event)
