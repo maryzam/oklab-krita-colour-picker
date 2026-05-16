@@ -1,7 +1,6 @@
 # OKLab Colour Picker — Architecture North Star
 
-Status: proposed (for discussion). Single source of truth for the in-place
-widget/dock refactor.
+Status: aligned. Single source of truth for the in-place widget/dock refactor.
 
 ---
 
@@ -61,13 +60,20 @@ A single source of truth, strictly one-way state flow into dumb views, and an
 **explicit** interaction state machine in the views so every transition is named
 and tested instead of emergent from a tangle of booleans.
 
-This is the **Redux** model, not MobX: one store (the controller) holds the
-colour state, views dispatch intents (`previewed` / `committed`) rather than
-mutating shared state, and the controller is the reducer that produces the next
-state and broadcasts it. There is no observable shared state that views write
-through (which would be the MobX style and is exactly today's
-four-copies-kept-in-sync problem). The per-view interaction state machine is
-local UI state only — it never holds colour truth.
+The design patterns, named tech-stack-agnostically:
+
+- **Single source of truth** — one owner (the controller) holds colour state;
+  no other component stores an authoritative copy.
+- **Unidirectional data flow** — state flows owner → views in one direction;
+  views never write shared state directly (Redux-style, for those who want a
+  one-word reference).
+- **Command/event (intent dispatch)** — views emit `previewed` / `committed`
+  intents; the controller decides the next state and broadcasts it.
+- **Finite state machine** — per-view interaction state is explicit, local UI
+  state only; it never holds colour truth.
+
+Today's defect is the inverse of all four: four mutable copies of the colour
+kept in sync by bidirectional signal round-trips.
 
 ---
 
