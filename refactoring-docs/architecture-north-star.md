@@ -1,17 +1,37 @@
 # OKLab Colour Picker — Architecture North Star
 
-Status: proposed (for discussion). Supersedes all earlier `refactoring-docs/`
-content. The plugin has diverged far from the original/legacy plugin; **do not
-restore or validate against deleted legacy code or old rewrite/PR docs.** This
-document is the single source of truth for the widget/dock refactor.
+Status: proposed (for discussion). Single source of truth for the in-place
+widget/dock refactor.
 
 ---
 
 ## 1. Why this document exists
 
-The colour-math, renderer, selector-model, and controller layers are clean and
-well-tested. The rot is concentrated in `dock.py` and `widgets/selector.py`
-(and, less severely, `widgets/readout_panel.py`).
+The lower layers — `color_math.py`, `renderers.py`, `selector_models.py`,
+`controller.py` — are in good shape, and that claim is enforced, not asserted:
+
+- **Isolation invariants** (AGENTS.md hard rules, enforced by
+  `tests/test_import_discipline.py`): only `plugin.py` / `controller.py` /
+  `krita_adapter.py` import Krita; `color_math.py` / `selector_models.py` import
+  no Qt or Krita.
+- **Test coverage**: `tests/test_color_math.py`, `test_renderers.py`,
+  `test_selector_models.py`, `test_controller.py` cover these layers directly.
+- **Dependency constraints**: data flows up the layer stack only
+  (math → models → renderers → controller); none import the widget/dock layer.
+
+The problems are concentrated in `dock.py`, `widgets/selector.py`, and
+`widgets/readout_panel.py`, and are concrete:
+
+1. **Behavioural divergence between selectors.** The tab selectors and the
+   shared LCH slider/swatch selector handle the same user gestures
+   inconsistently — indicator placement, commit timing, and achromatic
+   behaviour differ depending on which surface drove the change.
+2. **Edge cases handled poorly across user flows.** Achromatic (chroma=0),
+   out-of-gamut drag, keyboard nav, resize, and Krita round-trip each have
+   their own ad-hoc handling that breaks when flows combine.
+3. **Coupling and bloat.** The widget/dock code grows by near-duplicated
+   if/else branches added one edge case at a time, making it long, hard to
+   read, and hard to modify without regressing another flow.
 
 ### Root cause: the echo loop
 
@@ -40,6 +60,14 @@ own bolted-on re-entrancy guard.
 A single source of truth, strictly one-way state flow into dumb views, and an
 **explicit** interaction state machine in the views so every transition is named
 and tested instead of emergent from a tangle of booleans.
+
+This is the **Redux** model, not MobX: one store (the controller) holds the
+colour state, views dispatch intents (`previewed` / `committed`) rather than
+mutating shared state, and the controller is the reducer that produces the next
+state and broadcasts it. There is no observable shared state that views write
+through (which would be the MobX style and is exactly today's
+four-copies-kept-in-sync problem). The per-view interaction state machine is
+local UI state only — it never holds colour truth.
 
 ---
 
@@ -212,7 +240,35 @@ Dropping `PINNED` (IDLE straight after commit) is simpler but reintroduces the
 visible snap-to-canonical-hue=0 on achromatic clicks. Adopted: keep `PINNED`
 (see Open Decisions §6 — reversible).
 
-### 3.5 ReadoutPanel — reduced machine
+### 3.5 External colour changes (another widget, canvas eyedropper)
+
+"External" means any colour change the controller did not originate from *this*
+view: another selector tab, the LCH slider/swatch, Krita's canvas colour picker
+/ eyedropper, or a script setting the foreground. They all arrive identically —
+as a controller broadcast — so the state machine needs no per-source logic; it
+reacts to `kind` (§2.4):
+
+- **`COMMIT` / `EXTERNAL` / `INITIAL` / `ROLLBACK`** while this view is `IDLE`
+  → render the new colour from the model (this is the normal cross-widget and
+  canvas-pick path: pick on canvas → controller `EXTERNAL` → every idle
+  selector and the readout repaint).
+- The same kinds while this view is `PINNED` → exit to `IDLE` and render. The
+  user's pin is local to the gesture that set it; an external pick supersedes
+  it (this is the `PINNED → IDLE` row of §3.2 / INV-3 false branch).
+- The same kinds while this view is `DRAGGING` or `KEYBOARD` → **ignored**.
+  An in-flight local gesture wins; the controller's local-interaction guard
+  (`LOCAL_INTERACTION_SYNC_GRACE_SECONDS`) already suppresses competing
+  `EXTERNAL` syncs during this window, so a canvas pick mid-drag is dropped
+  rather than fighting the drag.
+- `PREVIEW`-kind from another view while this view is `IDLE` → render
+  (cross-widget live preview); while `PINNED`/`DRAGGING`/`KEYBOARD` → same rules
+  as above.
+
+`ReadoutPanel`'s edit-latch (§3.6) is the readout-specific instance of the
+`DRAGGING`/`KEYBOARD`-ignore rule above. No view ever reads the originating
+widget; absorption stays local (INV-3).
+
+### 3.6 ReadoutPanel — reduced machine
 
 `ReadoutPanel` adopts the same contract with a two-state machine: `IDLE` and
 `EDITING` (slider down / spinbox or hex focused). `EDITING` emits `previewed`;
@@ -285,7 +341,7 @@ indicators above hold for the touched surface.
   `desired` + dashed `snapped`); in-gamut draws a single ring (INV-2 /
   `IndicatorSpec`).
 - `EXTERNAL` broadcast arriving mid-edit in ReadoutPanel is latched; commit-exit
-  discards it, cancel-exit applies it (§3.5).
+  discards it, cancel-exit applies it (§3.6).
 
 ### 4.4 Edge cases (named tests, including randomized)
 
@@ -332,7 +388,7 @@ behaviour change beyond its row. Branch per slice (e.g. `rewrite/02-echo-kill`).
 | 0 | Characterization | Add §4.2–4.4 acceptance tests against *current* behaviour where it matches intent; mark known-bad with xfail referencing the invariant they will satisfy post-refactor. Add `hypothesis` dep + §4.5 properties (xfail allowed). | Suite green; xfails enumerated and linked to INV-/edge IDs |
 | 1 | Honest model contract | `SelectorModel` ABC + defaults; delete all `getattr` probes and disk `_snapped_colour_at` override; unify disk geometry helper. | No behaviour change; model tests + import-discipline green |
 | 2 | Echo kill + state machine | Introduce explicit state machine in `SelectorWidget` (§3); controller change contract §2.4 (rename listener API, emit `colour_changed`/`kind`); dock dumb broadcaster + lazy-tab seeding §2.5; `IndicatorSpec` model contract §2.3; delete `_last_interaction_position` family. **Decide here:** who builds the per-mode slice model from a broadcast colour and on which `kind` (the *policy*); slice 4 only optimizes its caching. Flip Phase-0 xfails for INV-1..INV-4 and chroma=0. | All §4 core/secondary/edge + INV-1..INV-6; achromatic + OOG dual-ring regression green; transition+state coverage met |
-| 3 | ReadoutPanel unification | Two-state machine; drop `_syncing`; latch/exit policy §3.5; same one-way contract. | ReadoutPanel flows §4.3 incl. external-change-during-edit; P2 holds for panel |
+| 3 | ReadoutPanel unification | Two-state machine; drop `_syncing`; latch/exit policy §3.6; same one-way contract. | ReadoutPanel flows §4.3 incl. external-change-during-edit; P2 holds for panel |
 | 4 | Slice-model rebuild optimization | Keep slice-2 rebuild *policy*; add caching so a mode's slice model is reconstructed only when its fixed slice coordinate actually changes, not per preview tick. | Perf tests stable; no model rebuild during a drag (counter assertion) |
 
 Phases 0–2 deliver the bug fix and the bulk of the simplification. 3–4 are
