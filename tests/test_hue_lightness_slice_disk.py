@@ -61,6 +61,46 @@ def test_disk_widget_renders_lightness_guide_rings_on_top_of_base(qtbot):
     assert any(diff[y, x] for x, y in cardinals)
 
 
+def test_disk_widget_indicator_follows_click_on_achromatic_slice(qtbot):
+    # At chroma=0 every angle yields the same greyscale OKLab, so the model
+    # can't recover hue from the colour. The widget must still place the
+    # indicator at the click point instead of snapping to the hue=0 axis.
+    widget = HueLightnessSliceDiskWidget(HueLightnessSliceModel(chroma=0.0))
+    widget.resize(121, 121)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    pos = QtCore.QPoint(60, 20)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, pos, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, pos, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    indicator = widget.indicator_position()
+    assert indicator is not None
+    assert indicator == pytest.approx((float(pos.x()), float(pos.y())))
+
+
+def test_disk_widget_drops_achromatic_override_after_resize(qtbot):
+    # The recorded click point is absolute widget pixels, so it must not
+    # survive a resize: the indicator should fall back to model placement
+    # rather than report the stale pre-resize pixel.
+    widget = HueLightnessSliceDiskWidget(HueLightnessSliceModel(chroma=0.0))
+    widget.resize(121, 121)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    pos = QtCore.QPoint(60, 20)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, pos, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, pos, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+    assert widget.indicator_position() == pytest.approx((float(pos.x()), float(pos.y())))
+
+    widget.resize(201, 201)
+    QtCore.QCoreApplication.processEvents()
+    indicator = widget.indicator_position()
+
+    assert indicator is not None
+    assert indicator != pytest.approx((float(pos.x()), float(pos.y())))
+
+
 def _render_to_rgba_array(widget) -> np.ndarray:
     image = QtGui.QImage(widget.size(), QtGui.QImage.Format_ARGB32)
     image.fill(0)
