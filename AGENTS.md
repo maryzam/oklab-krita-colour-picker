@@ -1,13 +1,15 @@
 # Agent Development Rules
 
-Follow the rewrite plan in `refactoring-docs/rewrite-plan.md` and the PR
-sequence in `refactoring-docs/pr-execution-plan.md`. Keep PRs small and
-ordered by rewrite slice.
+Follow `refactoring-docs/architecture-north-star.md` — the single source of
+truth for the widget/dock refactor (architecture, invariants, state machine,
+test plan, and PR sequence). Keep PRs small and ordered by the slice table
+there.
+
+The legacy plugin and all earlier rewrite/PR docs are deleted. Do not restore
+them, import from them, or validate changes against old/deleted code.
 
 ## Hard Rules
 
-- `legacy-plugin/` is local reference material only. Read it if needed, but do
-  not track it, import it, or copy modules from it.
 - `refactoring-docs/` is tracked and should stay current when the dev loop
   changes.
 - Only `oklab_colour_picker/plugin.py`, `oklab_colour_picker/controller.py`, or
@@ -31,11 +33,9 @@ push. GitHub Actions also runs the tracked-tree check on PRs.
 
 ## Local Loop
 
-1. Create a branch per rewrite slice, for example `rewrite/01-color-math`.
-2. Add or update deterministic tests before implementation.
+1. Create a branch per slice from the north-star table, e.g. `rewrite/02-echo-kill`.
+2. Add or update deterministic tests before implementation (red-green per slice).
 3. Run focused tests while developing, then run the pre-push check before PR.
-4. Inspect staged files before commit and reject anything under
-   `legacy-plugin/`.
 
 Run checks manually:
 
