@@ -1,8 +1,8 @@
 """Pure, Qt-free interaction state machine for the selector view (north-star §3).
 
 States are *objects* (GoF State pattern): each one owns its data, answers its
-own questions (``anchor``, ``absorb``, ``indicator``) and returns the next
-state from every event. There is no conditional dispatch on a state tag and no
+own questions (``anchor``, ``broadcast``, ``indicator``) and returns typed
+interaction results. There is no conditional dispatch on a state tag and no
 ad-hoc "anchored" / "in-flight" state groups — those questions are answered
 polymorphically by the state itself.
 
@@ -20,11 +20,96 @@ from __future__ import annotations
 
 from abc import ABC
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 
 
 Position = tuple[float, float]
 Point = tuple[float, float]
+
+
+class StateKind(str, Enum):
+    IDLE = "IDLE"
+    DRAGGING = "DRAGGING"
+    KEYBOARD = "KEYBOARD"
+    PINNED = "PINNED"
+
+
+class PickKind(str, Enum):
+    EXACT = "exact"
+    SNAPPED = "snapped"
+    INVALID = "invalid"
+
+
+@dataclass(frozen=True)
+class PickResult:
+    kind: PickKind
+    colour: object | None = None
+
+    @classmethod
+    def exact(cls, colour: object) -> "PickResult":
+        return cls(PickKind.EXACT, colour)
+
+    @classmethod
+    def snapped(cls, colour: object) -> "PickResult":
+        return cls(PickKind.SNAPPED, colour)
+
+    @classmethod
+    def invalid(cls) -> "PickResult":
+        return cls(PickKind.INVALID)
+
+
+@dataclass(frozen=True)
+class PointerPress:
+    point: Point
+
+
+@dataclass(frozen=True)
+class PointerMove:
+    point: Point
+
+
+@dataclass(frozen=True)
+class PointerRelease:
+    point: Point
+
+
+@dataclass(frozen=True)
+class Navigation:
+    point: Point
+    colour: object
+
+
+@dataclass(frozen=True)
+class KeyRelease:
+    pass
+
+
+@dataclass(frozen=True)
+class FocusOut:
+    pass
+
+
+@dataclass(frozen=True)
+class Reframe:
+    pass
+
+
+@dataclass(frozen=True)
+class Broadcast:
+    colour: object | None
+
+
+SelectorCommand = (
+    PointerPress
+    | PointerMove
+    | PointerRelease
+    | Navigation
+    | KeyRelease
+    | FocusOut
+    | Reframe
+    | Broadcast
+)
 
 
 @dataclass(frozen=True)
@@ -58,18 +143,28 @@ class Ctx(Protocol):
     def set_colour(self, colour: object | None) -> None: ...
     def preview(self, colour: object | None) -> None: ...
     def commit(self, colour: object) -> None: ...
-    def color_at(self, point: Point) -> object | None: ...
-    def drag_colour_at(self, point: Point, last_valid: object | None) -> object | None: ...
+    def pick(self, point: Point) -> PickResult: ...
     def quantized_equal(self, a: object | None, b: object | None) -> bool: ...
     def model_indicator(self) -> Indicator: ...
     def model_position(self) -> Position | None: ...
+
+
+@dataclass(frozen=True)
+class InteractionResult:
+    state: "State"
+    handled: bool = True
+    rendered_broadcast: bool = False
 
 
 class State(ABC):
     """Base state. Every event defaults to a no-op self-transition, so each
     concrete state only overrides the events it actually handles."""
 
-    name: str = "?"
+    kind: StateKind
+
+    @property
+    def name(self) -> str:
+        return self.kind.value
 
     @property
     def anchor(self) -> Position | None:
@@ -82,32 +177,35 @@ class State(ABC):
         anchor = self.anchor
         return anchor if anchor is not None else ctx.model_position()
 
-    # Events ----------------------------------------------------------
-    def absorb(self, ctx: Ctx, colour: object | None) -> "State":
-        return self
+    def navigation_origin(self, ctx: Ctx, fallback: Position) -> Position | None:
+        return self.indicator_position(ctx) or fallback
 
-    def press(self, ctx: Ctx, point: Point) -> "State":
+    # Events ----------------------------------------------------------
+    def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
+        return InteractionResult(self, handled=True, rendered_broadcast=False)
+
+    def press(self, ctx: Ctx, point: Point) -> InteractionResult:
         return _begin_drag(ctx, point)
 
-    def move(self, ctx: Ctx, point: Point) -> "State":
-        return self
+    def move(self, ctx: Ctx, point: Point) -> InteractionResult:
+        return InteractionResult(self, handled=False)
 
-    def release(self, ctx: Ctx, point: Point) -> "State":
-        return self
+    def release(self, ctx: Ctx, point: Point) -> InteractionResult:
+        return InteractionResult(self, handled=False)
 
-    def nav(self, ctx: Ctx, point: Point, colour: object) -> "State":
+    def nav(self, ctx: Ctx, point: Point, colour: object) -> InteractionResult:
         return _begin_keyboard(ctx, point, colour)
 
-    def key_release(self, ctx: Ctx) -> "State":
-        return self
+    def key_release(self, ctx: Ctx) -> InteractionResult:
+        return InteractionResult(self, handled=False)
 
-    def focus_out(self, ctx: Ctx) -> "State":
-        return self
+    def focus_out(self, ctx: Ctx) -> InteractionResult:
+        return InteractionResult(self, handled=False)
 
-    def reframe(self, ctx: Ctx) -> "State":
+    def reframe(self, ctx: Ctx) -> InteractionResult:
         """Model or widget-size change (north-star §3.2)."""
 
-        return self
+        return InteractionResult(self)
 
 
 class _Anchored(State):
@@ -127,129 +225,212 @@ class _Anchored(State):
 class Idle(State):
     """Rendering an externally pushed colour; no anchor (INV-1)."""
 
-    name = "IDLE"
+    kind = StateKind.IDLE
 
-    def absorb(self, ctx: Ctx, colour: object | None) -> State:
+    def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
         ctx.set_colour(colour)
-        return self
+        return InteractionResult(self, rendered_broadcast=True)
 
 
 class Dragging(_Anchored):
     """Pointer held; emitting previews. Owns the cancel target and the last
     in-gamut colour for the out-of-gamut release fallback (INV-6)."""
 
-    name = "DRAGGING"
+    kind = StateKind.DRAGGING
 
-    def __init__(self, anchor: Position, before: object | None, last_valid: object | None) -> None:
+    def __init__(
+        self, anchor: Position, before: object | None, last_valid: object | None
+    ) -> None:
         self._anchor = anchor
         self._before = before
         self._last_valid = last_valid
 
-    # An in-flight local gesture always wins; the inbound colour is dropped.
-    def absorb(self, ctx: Ctx, colour: object | None) -> State:
-        return self
+    def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
+        return InteractionResult(self)
 
-    def move(self, ctx: Ctx, point: Point) -> State:
+    def navigation_origin(self, ctx: Ctx, fallback: Position) -> Position | None:
+        return None
+
+    def move(self, ctx: Ctx, point: Point) -> InteractionResult:
         return self._pick(ctx, point)
 
-    def release(self, ctx: Ctx, point: Point) -> State:
-        colour = ctx.drag_colour_at(point, self._last_valid)
+    def release(self, ctx: Ctx, point: Point) -> InteractionResult:
+        picked = ctx.pick(point)
+        colour = _drag_colour(picked, has_last_valid=self._last_valid is not None)
         if colour is not None:
             ctx.set_colour(colour)
             ctx.commit(colour)
-            return Pinned(colour, (float(point[0]), float(point[1])))
+            return InteractionResult(Pinned(colour, (float(point[0]), float(point[1]))))
         if self._last_valid is not None:
             ctx.set_colour(self._last_valid)
             ctx.commit(self._last_valid)
-            return Pinned(self._last_valid, self._anchor)
+            return InteractionResult(Pinned(self._last_valid, self._anchor))
         ctx.set_colour(self._before)
         ctx.preview(self._before)
-        return Idle()
+        return InteractionResult(Idle())
 
-    def _pick(self, ctx: Ctx, point: Point) -> State:
-        colour = ctx.drag_colour_at(point, self._last_valid)
+    def _pick(self, ctx: Ctx, point: Point) -> InteractionResult:
+        picked = ctx.pick(point)
+        colour = _drag_colour(picked, has_last_valid=self._last_valid is not None)
         if colour is not None:
             ctx.set_colour(colour)
             ctx.preview(colour)
-            return Dragging((float(point[0]), float(point[1])), self._before, colour)
+            return InteractionResult(
+                Dragging((float(point[0]), float(point[1])), self._before, colour)
+            )
         if self._last_valid is not None:
-            # Keep cancellation semantics until a valid colour is reached.
-            return self
+            return InteractionResult(self)
         ctx.set_colour(None)
         ctx.preview(None)
-        return Dragging(self._anchor, self._before, None)
+        return InteractionResult(Dragging(self._anchor, self._before, None))
 
 
 class Keyboard(_Anchored):
     """Arrow/page navigation in flight; commit pending until key-up/blur."""
 
-    name = "KEYBOARD"
+    kind = StateKind.KEYBOARD
 
     def __init__(self, anchor: Position) -> None:
         self._anchor = anchor
 
-    def absorb(self, ctx: Ctx, colour: object | None) -> State:
-        return self
+    def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
+        return InteractionResult(self)
 
-    def nav(self, ctx: Ctx, point: Point, colour: object) -> State:
+    def nav(self, ctx: Ctx, point: Point, colour: object) -> InteractionResult:
         ctx.set_colour(colour)
         ctx.preview(colour)
-        return Keyboard((float(point[0]), float(point[1])))
+        return InteractionResult(Keyboard((float(point[0]), float(point[1]))))
 
-    def key_release(self, ctx: Ctx) -> State:
+    def key_release(self, ctx: Ctx) -> InteractionResult:
         return self._flush(ctx)
 
-    def focus_out(self, ctx: Ctx) -> State:
+    def focus_out(self, ctx: Ctx) -> InteractionResult:
         return self._flush(ctx)
 
-    def _flush(self, ctx: Ctx) -> State:
+    def _flush(self, ctx: Ctx) -> InteractionResult:
         colour = ctx.colour
         if colour is None:
-            return Idle()
+            return InteractionResult(Idle())
         ctx.commit(colour)
-        return Pinned(colour, self._anchor)
+        return InteractionResult(Pinned(colour, self._anchor))
 
 
 class Pinned(_Anchored):
     """Post-commit: holds the committed colour at its pixel until something
     external supersedes it. The deliberate UX terminal state (§3.4)."""
 
-    name = "PINNED"
+    kind = StateKind.PINNED
 
     def __init__(self, colour: object, anchor: Position) -> None:
         self._colour = colour
         self._anchor = anchor
 
-    def absorb(self, ctx: Ctx, colour: object | None) -> State:
+    def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
         if colour is not None and ctx.quantized_equal(colour, self._colour):
-            return self  # the echo — swallow it, stay PINNED (INV-3 / INV-4)
-        return Idle().absorb(ctx, colour)  # a different colour supersedes the pin
+            return InteractionResult(self)
+        return Idle().broadcast(ctx, colour)
 
-    def reframe(self, ctx: Ctx) -> State:
-        return Idle()
+    def reframe(self, ctx: Ctx) -> InteractionResult:
+        return InteractionResult(Idle())
 
 
-def _begin_drag(ctx: Ctx, point: Point) -> State:
+def _begin_drag(ctx: Ctx, point: Point) -> InteractionResult:
     return Dragging((float(point[0]), float(point[1])), ctx.colour, None)._pick(ctx, point)
 
 
-def _begin_keyboard(ctx: Ctx, point: Point, colour: object) -> State:
+def _begin_keyboard(ctx: Ctx, point: Point, colour: object) -> InteractionResult:
     ctx.set_colour(colour)
     ctx.preview(colour)
-    return Keyboard((float(point[0]), float(point[1])))
+    return InteractionResult(Keyboard((float(point[0]), float(point[1]))))
 
 
-def state_from_name(
-    name: str, *, colour: object | None = None, anchor: Position | None = None
-) -> State:
-    """Build a state by name. Orchestration/test hook for §3.2."""
+class SelectorInteraction:
+    def __init__(self, initial: State | None = None) -> None:
+        self._state = initial or Idle()
+        self._transition_log: list[StateKind] = [self._state.kind]
 
-    if name == "IDLE":
-        return Idle()
-    if name == "DRAGGING":
-        return Dragging(anchor or (0.0, 0.0), colour, None)
-    if name == "KEYBOARD":
-        return Keyboard(anchor or (0.0, 0.0))
-    if name == "PINNED":
-        return Pinned(colour, anchor or (0.0, 0.0))
-    raise ValueError(f"unknown selector state: {name!r}")
+    @property
+    def state_kind(self) -> StateKind:
+        return self._state.kind
+
+    @property
+    def state_name(self) -> str:
+        return self._state.name
+
+    @property
+    def anchor(self) -> Position | None:
+        return self._state.anchor
+
+    @property
+    def transition_log(self) -> tuple[str, ...]:
+        return tuple(kind.value for kind in self._transition_log)
+
+    def dispatch(self, ctx: Ctx, command: SelectorCommand) -> InteractionResult:
+        result = self._handle(ctx, command)
+        self._adopt(result.state)
+        return result
+
+    def indicator(self, ctx: Ctx) -> Indicator:
+        return self._state.indicator(ctx)
+
+    def indicator_position(self, ctx: Ctx) -> Position | None:
+        return self._state.indicator_position(ctx)
+
+    def navigation_origin(self, ctx: Ctx, fallback: Position) -> Position | None:
+        return self._state.navigation_origin(ctx, fallback)
+
+    def force_for_test(
+        self,
+        kind: StateKind,
+        *,
+        colour: object | None = None,
+        anchor: Position | None = None,
+    ) -> None:
+        anchor = anchor or (0.0, 0.0)
+        if kind is StateKind.IDLE:
+            state: State = Idle()
+        elif kind is StateKind.DRAGGING:
+            state = Dragging(anchor, colour, None)
+        elif kind is StateKind.KEYBOARD:
+            state = Keyboard(anchor)
+        elif kind is StateKind.PINNED:
+            state = Pinned(colour, anchor)
+        else:
+            raise ValueError(f"unknown selector state: {kind!r}")
+        self._adopt(state)
+
+    def _handle(self, ctx: Ctx, command: SelectorCommand) -> InteractionResult:
+        if isinstance(command, PointerPress):
+            return self._state.press(ctx, command.point)
+        if isinstance(command, PointerMove):
+            return self._state.move(ctx, command.point)
+        if isinstance(command, PointerRelease):
+            return self._state.release(ctx, command.point)
+        if isinstance(command, Navigation):
+            return self._state.nav(ctx, command.point, command.colour)
+        if isinstance(command, KeyRelease):
+            return self._state.key_release(ctx)
+        if isinstance(command, FocusOut):
+            return self._state.focus_out(ctx)
+        if isinstance(command, Reframe):
+            return self._state.reframe(ctx)
+        if isinstance(command, Broadcast):
+            return self._state.broadcast(ctx, command.colour)
+        raise TypeError(f"unknown selector command: {command!r}")
+
+    def _adopt(self, state: State) -> None:
+        if state.kind is not self._state.kind:
+            self._transition_log.append(state.kind)
+        self._state = state
+
+
+def _drag_colour(picked: PickResult, *, has_last_valid: bool) -> object | None:
+    if picked.kind is PickKind.EXACT:
+        if picked.colour is None:
+            raise AssertionError("exact pick without a colour")
+        return picked.colour
+    if picked.kind is PickKind.SNAPPED and has_last_valid:
+        if picked.colour is None:
+            raise AssertionError("snapped pick without a colour")
+        return picked.colour
+    return None

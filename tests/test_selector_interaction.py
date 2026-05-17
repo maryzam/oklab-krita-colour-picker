@@ -6,11 +6,21 @@ split: the interaction logic is unit-testable in isolation.
 """
 
 from oklab_colour_picker.selector_interaction import (
+    Broadcast,
     Dragging,
+    FocusOut,
     Idle,
+    KeyRelease,
     Keyboard,
+    Navigation,
+    PickResult,
+    PointerMove,
+    PointerPress,
+    PointerRelease,
     Pinned,
-    state_from_name,
+    Reframe,
+    SelectorInteraction,
+    StateKind,
 )
 
 
@@ -34,17 +44,11 @@ class FakeCtx:
     def commit(self, colour):
         self.commits.append(colour)
 
-    def color_at(self, point):
+    def pick(self, point):
         x = point[0]
-        return float(x) if 0 <= x < self.WIDTH else None
-
-    def drag_colour_at(self, point, last_valid):
-        colour = self.color_at(point)
-        if colour is not None:
-            return colour
-        if last_valid is None:
-            return None
-        return float(min(self.WIDTH - 1, max(0, point[0])))
+        if 0 <= x < self.WIDTH:
+            return PickResult.exact(float(x))
+        return PickResult.snapped(float(min(self.WIDTH - 1, max(0, x))))
 
     def quantized_equal(self, a, b):
         return a is not None and b is not None and round(a) == round(b)
@@ -60,24 +64,26 @@ class FakeCtx:
 
 def test_idle_absorb_sets_colour_and_stays_idle():
     ctx = FakeCtx()
-    state = Idle().absorb(ctx, 3.0)
+    result = Idle().broadcast(ctx, 3.0)
+    state = result.state
     assert isinstance(state, Idle)
+    assert result.rendered_broadcast
     assert ctx.colour == 3.0
     assert ctx.previews == [] and ctx.commits == []
 
 
 def test_click_drag_release_is_idle_dragging_pinned():
     ctx = FakeCtx()
-    state = Idle().press(ctx, (2.0, 0.0))
+    state = Idle().press(ctx, (2.0, 0.0)).state
     assert isinstance(state, Dragging)
     assert state.anchor == (2.0, 0.0)
     assert ctx.previews == [2.0]
 
-    state = state.move(ctx, (5.0, 0.0))
+    state = state.move(ctx, (5.0, 0.0)).state
     assert isinstance(state, Dragging) and state.anchor == (5.0, 0.0)
     assert ctx.previews == [2.0, 5.0]
 
-    state = state.release(ctx, (7.0, 0.0))
+    state = state.release(ctx, (7.0, 0.0)).state
     assert isinstance(state, Pinned)
     assert state.anchor == (7.0, 0.0)
     assert ctx.commits == [7.0]
@@ -85,21 +91,24 @@ def test_click_drag_release_is_idle_dragging_pinned():
 
 def test_dragging_ignores_inbound_colour_in_flight():
     ctx = FakeCtx()
-    state = Idle().press(ctx, (2.0, 0.0))
+    state = Idle().press(ctx, (2.0, 0.0)).state
     same = state
-    state = state.absorb(ctx, 9.0)
+    result = state.broadcast(ctx, 9.0)
+    state = result.state
     assert state is same
+    assert not result.rendered_broadcast
     assert ctx.colour == 2.0  # unchanged by the ignored broadcast
 
 
 def test_drag_that_never_hits_valid_restores_before_and_does_not_commit():
     ctx = FakeCtx()
     ctx.set_colour(4.0)
-    state = Idle().press(ctx, (50.0, 0.0))  # invalid press
+    ctx.pick = lambda _point: PickResult.invalid()
+    state = Idle().press(ctx, (50.0, 0.0)).state  # invalid press
     assert isinstance(state, Dragging)
     assert ctx.previews == [None]
 
-    state = state.release(ctx, (60.0, 0.0))
+    state = state.release(ctx, (60.0, 0.0)).state
     assert isinstance(state, Idle)
     assert ctx.colour == 4.0
     assert ctx.previews[-1] == 4.0
@@ -108,38 +117,38 @@ def test_drag_that_never_hits_valid_restores_before_and_does_not_commit():
 
 def test_drag_leaving_gamut_snaps_continuously_and_commits_snapped():
     ctx = FakeCtx()
-    state = Idle().press(ctx, (3.0, 0.0))            # valid: last_valid set
-    state = state.move(ctx, (99.0, 0.0))             # off-gamut -> snapped
+    state = Idle().press(ctx, (3.0, 0.0)).state       # valid: last_valid set
+    state = state.move(ctx, (99.0, 0.0)).state        # off-gamut -> snapped
     assert None not in ctx.previews
-    state = state.release(ctx, (99.0, 0.0))
+    state = state.release(ctx, (99.0, 0.0)).state
     assert isinstance(state, Pinned)
     assert ctx.commits == [9.0]                      # snapped to the rim
 
 
 def test_keyboard_nav_then_release_commits():
     ctx = FakeCtx()
-    state = Idle().nav(ctx, (4.0, 0.0), 4.0)
+    state = Idle().nav(ctx, (4.0, 0.0), 4.0).state
     assert isinstance(state, Keyboard)
     assert ctx.previews == [4.0] and ctx.commits == []
 
-    state = state.nav(ctx, (5.0, 0.0), 5.0)
+    state = state.nav(ctx, (5.0, 0.0), 5.0).state
     assert isinstance(state, Keyboard)
-    state = state.key_release(ctx)
+    state = state.key_release(ctx).state
     assert isinstance(state, Pinned)
     assert ctx.commits == [5.0]
 
 
 def test_keyboard_focus_out_flushes_commit():
     ctx = FakeCtx()
-    state = Idle().nav(ctx, (4.0, 0.0), 4.0).focus_out(ctx)
+    state = Idle().nav(ctx, (4.0, 0.0), 4.0).state.focus_out(ctx).state
     assert isinstance(state, Pinned)
     assert ctx.commits == [4.0]
 
 
 def test_mouse_press_during_keyboard_cancels_without_commit():
     ctx = FakeCtx()
-    state = Idle().nav(ctx, (4.0, 0.0), 4.0)
-    state = state.press(ctx, (2.0, 0.0))
+    state = Idle().nav(ctx, (4.0, 0.0), 4.0).state
+    state = state.press(ctx, (2.0, 0.0)).state
     assert isinstance(state, Dragging)
     assert ctx.commits == []
 
@@ -148,31 +157,57 @@ def test_pinned_swallows_quantized_equal_echo_but_yields_to_difference():
     ctx = FakeCtx()
     pinned = Pinned(5.0, (5.0, 0.0))
 
-    same = pinned.absorb(ctx, 5.4)  # round-equal -> echo
+    result = pinned.broadcast(ctx, 5.4)  # round-equal -> echo
+    same = result.state
     assert same is pinned
+    assert not result.rendered_broadcast
     assert ctx.colour is None  # not re-applied
 
-    other = pinned.absorb(ctx, 8.0)
+    other = pinned.broadcast(ctx, 8.0).state
     assert isinstance(other, Idle)
     assert ctx.colour == 8.0
 
 
 def test_reframe_only_resets_pinned():
     ctx = FakeCtx()
-    assert isinstance(Pinned(1.0, (1.0, 0.0)).reframe(ctx), Idle)
+    assert isinstance(Pinned(1.0, (1.0, 0.0)).reframe(ctx).state, Idle)
     idle = Idle()
-    assert idle.reframe(ctx) is idle
-    drag = Idle().press(ctx, (2.0, 0.0))
-    assert drag.reframe(ctx) is drag
+    assert idle.reframe(ctx).state is idle
+    drag = Idle().press(ctx, (2.0, 0.0)).state
+    assert drag.reframe(ctx).state is drag
 
 
-def test_state_from_name_round_trips_and_rejects_unknown():
-    assert state_from_name("IDLE").name == "IDLE"
-    assert state_from_name("DRAGGING", anchor=(1.0, 2.0)).anchor == (1.0, 2.0)
-    assert state_from_name("KEYBOARD", anchor=(3.0, 4.0)).anchor == (3.0, 4.0)
-    assert state_from_name("PINNED", colour=1.0, anchor=(5.0, 6.0)).anchor == (5.0, 6.0)
-    try:
-        state_from_name("BOGUS")
-        raise AssertionError("expected ValueError")
-    except ValueError:
-        pass
+def test_interaction_facade_dispatches_commands_and_records_transitions():
+    ctx = FakeCtx()
+    interaction = SelectorInteraction()
+
+    result = interaction.dispatch(ctx, PointerPress((2.0, 0.0)))
+    assert result.handled
+    assert interaction.state_kind is StateKind.DRAGGING
+    interaction.dispatch(ctx, PointerMove((3.0, 0.0)))
+    interaction.dispatch(ctx, PointerRelease((3.0, 0.0)))
+    assert interaction.state_kind is StateKind.PINNED
+
+    result = interaction.dispatch(ctx, Broadcast(3.4))
+    assert result.handled
+    assert not result.rendered_broadcast
+    assert interaction.transition_log == ("IDLE", "DRAGGING", "PINNED")
+
+    result = interaction.dispatch(ctx, Reframe())
+    assert result.handled
+    assert interaction.state_kind is StateKind.IDLE
+
+
+def test_interaction_facade_handles_keyboard_and_focus_commands():
+    ctx = FakeCtx()
+    interaction = SelectorInteraction()
+
+    interaction.dispatch(ctx, Navigation((4.0, 0.0), 4.0))
+    assert interaction.state_kind is StateKind.KEYBOARD
+    interaction.dispatch(ctx, FocusOut())
+    assert interaction.state_kind is StateKind.PINNED
+
+    interaction.dispatch(ctx, Reframe())
+    interaction.dispatch(ctx, Navigation((5.0, 0.0), 5.0))
+    interaction.dispatch(ctx, KeyRelease())
+    assert ctx.commits[-1] == 5.0

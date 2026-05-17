@@ -11,6 +11,7 @@ from oklab_colour_picker.selector_models import (
     LightnessChromaSliceModel,
     LightnessSliceModel,
 )
+from oklab_colour_picker.selector_interaction import StateKind
 
 
 MODEL_CASES = (
@@ -90,9 +91,11 @@ def test_p3_idle_indicator_is_independent_of_interaction_history(case, width, he
 
     widget.show_colour(colour)
     idle_position = widget.indicator_position()
-    widget.enter_state("DRAGGING", anchor=(width / 2.0, height / 2.0))
+    widget._force_state_for_test(
+        StateKind.DRAGGING, anchor=(width / 2.0, height / 2.0)
+    )
     widget.show_colour(colour)
-    widget.enter_state("IDLE", anchor=None)
+    widget._force_state_for_test(StateKind.IDLE, anchor=None)
 
     assert widget.indicator_position() == pytest.approx(idle_position)
 

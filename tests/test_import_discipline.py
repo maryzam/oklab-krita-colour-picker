@@ -236,6 +236,42 @@ def test_dock_does_not_echo_colour_back_into_views_on_intent():
     assert offenders == []
 
 
+def test_selector_widget_does_not_dispatch_on_interaction_state_names():
+    """State-pattern boundary: the Qt adapter must not branch on string state
+    names. It dispatches commands to the interaction facade and reacts only to
+    typed outcomes such as ``handled`` or ``rendered_broadcast``."""
+
+    path = ROOT / "oklab_colour_picker" / "widgets" / "selector.py"
+    source = path.read_text()
+    tree = ast.parse(source, filename=path.relative_to(ROOT).as_posix())
+
+    assert "_state.name" not in source
+    assert "state_from_name" not in source
+    assert "enter_state" not in source
+    offenders = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and node.value in {"IDLE", "DRAGGING", "KEYBOARD", "PINNED"}
+    ]
+    assert offenders == []
+
+
+def test_selector_broadcast_model_policy_uses_factory_result_not_state_probe():
+    path = ROOT / "oklab_colour_picker" / "widgets" / "selector.py"
+    source = path.read_text()
+
+    assert "model_thunk" not in source
+    assert "rendered_broadcast" in source
+    assert ".name ==" not in source
+
+
+def test_selector_interaction_has_no_string_state_factory():
+    source = (ROOT / "oklab_colour_picker" / "selector_interaction.py").read_text()
+
+    assert "state_from_name" not in source
+
+
 def _project_python_asts():
     for full_path in sorted((ROOT / "oklab_colour_picker").rglob("*.py")):
         path = full_path.relative_to(ROOT)

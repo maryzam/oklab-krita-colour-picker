@@ -190,6 +190,16 @@ The widget is *already* a state machine smeared across `_pressed`,
 `_keyboard_commit_pending`, `_colour_before_drag`, `_last_valid_drag_colour`,
 `_last_interaction_position`. We make it explicit.
 
+The Qt widget talks to the machine through a small **interaction facade**. The
+widget dispatches typed commands (`PointerPress`, `PointerMove`,
+`PointerRelease`, `Navigation`, `Broadcast`, `Reframe`, etc.) and receives a
+typed result (`handled`, `rendered_broadcast`). It never branches on string
+state names. The dock supplies per-mode selector models through a factory; the
+factory is invoked only when the interaction result says the broadcast was
+rendered. Picking is a strategy result (`EXACT`, `SNAPPED`, `INVALID`) so the
+drag state owns fallback decisions instead of exposing `last_valid` or other
+state-owned data through the widget adapter.
+
 ### 3.1 States
 
 | State      | Meaning                                                            | Anchor        | Indicator source |
@@ -243,6 +253,9 @@ discarded on exit.
 - **INV-6 — out-of-gamut continuity.** During `DRAGGING`, leaving the gamut leaf
   snaps via `model.snapped_color_at_position`; the preview stays continuous and
   `last_valid` tracks the last in-gamut colour for release fallback.
+- **INV-7 — no state-name dispatch outside the machine.** Downstream code
+  reacts to typed interaction outcomes, never `state == "DRAGGING"` /
+  `"PINNED"` string probes. State names are only a debug/test observation.
 
 ### 3.4 PINNED — the deliberate UX decision
 
