@@ -272,6 +272,20 @@ def test_selector_interaction_has_no_string_state_factory():
     assert "state_from_name" not in source
 
 
+def test_selector_interaction_dispatch_uses_handler_registry():
+    source = (ROOT / "oklab_colour_picker" / "selector_interaction.py").read_text()
+
+    assert "_COMMAND_HANDLERS" in source
+    assert "isinstance(command" not in source
+
+
+def test_dock_uses_explicit_colour_subscription():
+    source = (ROOT / "oklab_colour_picker" / "dock.py").read_text()
+
+    assert "ColourSubscription" in source
+    assert "self._colour_listener" not in source
+
+
 def _project_python_asts():
     for full_path in sorted((ROOT / "oklab_colour_picker").rglob("*.py")):
         path = full_path.relative_to(ROOT)

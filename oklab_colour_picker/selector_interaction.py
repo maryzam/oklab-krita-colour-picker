@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Any, Callable, Protocol
 
 
 Position = tuple[float, float]
@@ -386,37 +386,19 @@ class SelectorInteraction:
         colour: object | None = None,
         anchor: Position | None = None,
     ) -> None:
-        anchor = anchor or (0.0, 0.0)
-        if kind is StateKind.IDLE:
-            state: State = Idle()
-        elif kind is StateKind.DRAGGING:
-            state = Dragging(anchor, colour, None)
-        elif kind is StateKind.KEYBOARD:
-            state = Keyboard(anchor)
-        elif kind is StateKind.PINNED:
-            state = Pinned(colour, anchor)
-        else:
+        try:
+            factory = _STATE_FACTORIES[kind]
+        except KeyError as err:
             raise ValueError(f"unknown selector state: {kind!r}")
+        state = factory(colour, anchor or (0.0, 0.0))
         self._adopt(state)
 
     def _handle(self, ctx: Ctx, command: SelectorCommand) -> InteractionResult:
-        if isinstance(command, PointerPress):
-            return self._state.press(ctx, command.point)
-        if isinstance(command, PointerMove):
-            return self._state.move(ctx, command.point)
-        if isinstance(command, PointerRelease):
-            return self._state.release(ctx, command.point)
-        if isinstance(command, Navigation):
-            return self._state.nav(ctx, command.point, command.colour)
-        if isinstance(command, KeyRelease):
-            return self._state.key_release(ctx)
-        if isinstance(command, FocusOut):
-            return self._state.focus_out(ctx)
-        if isinstance(command, Reframe):
-            return self._state.reframe(ctx)
-        if isinstance(command, Broadcast):
-            return self._state.broadcast(ctx, command.colour)
-        raise TypeError(f"unknown selector command: {command!r}")
+        try:
+            handler = _COMMAND_HANDLERS[type(command)]
+        except KeyError as err:
+            raise TypeError(f"unknown selector command: {command!r}") from err
+        return handler(self._state, ctx, command)
 
     def _adopt(self, state: State) -> None:
         if state.kind is not self._state.kind:
@@ -434,3 +416,75 @@ def _drag_colour(picked: PickResult, *, has_last_valid: bool) -> object | None:
             raise AssertionError("snapped pick without a colour")
         return picked.colour
     return None
+
+
+StateFactory = Callable[[object | None, Position], State]
+CommandHandler = Callable[[State, Ctx, Any], InteractionResult]
+
+
+def _new_idle(_colour: object | None, _anchor: Position) -> State:
+    return Idle()
+
+
+def _new_dragging(colour: object | None, anchor: Position) -> State:
+    return Dragging(anchor, colour, None)
+
+
+def _new_keyboard(_colour: object | None, anchor: Position) -> State:
+    return Keyboard(anchor)
+
+
+def _new_pinned(colour: object | None, anchor: Position) -> State:
+    return Pinned(colour, anchor)
+
+
+_STATE_FACTORIES: dict[StateKind, StateFactory] = {
+    StateKind.IDLE: _new_idle,
+    StateKind.DRAGGING: _new_dragging,
+    StateKind.KEYBOARD: _new_keyboard,
+    StateKind.PINNED: _new_pinned,
+}
+
+
+def _handle_press(state: State, ctx: Ctx, command: PointerPress) -> InteractionResult:
+    return state.press(ctx, command.point)
+
+
+def _handle_move(state: State, ctx: Ctx, command: PointerMove) -> InteractionResult:
+    return state.move(ctx, command.point)
+
+
+def _handle_release(state: State, ctx: Ctx, command: PointerRelease) -> InteractionResult:
+    return state.release(ctx, command.point)
+
+
+def _handle_navigation(state: State, ctx: Ctx, command: Navigation) -> InteractionResult:
+    return state.nav(ctx, command.point, command.colour)
+
+
+def _handle_key_release(state: State, ctx: Ctx, _command: object) -> InteractionResult:
+    return state.key_release(ctx)
+
+
+def _handle_focus_out(state: State, ctx: Ctx, _command: object) -> InteractionResult:
+    return state.focus_out(ctx)
+
+
+def _handle_reframe(state: State, ctx: Ctx, _command: object) -> InteractionResult:
+    return state.reframe(ctx)
+
+
+def _handle_broadcast(state: State, ctx: Ctx, command: Broadcast) -> InteractionResult:
+    return state.broadcast(ctx, command.colour)
+
+
+_COMMAND_HANDLERS: dict[type[object], CommandHandler] = {
+    PointerPress: _handle_press,
+    PointerMove: _handle_move,
+    PointerRelease: _handle_release,
+    Navigation: _handle_navigation,
+    KeyRelease: _handle_key_release,
+    FocusOut: _handle_focus_out,
+    Reframe: _handle_reframe,
+    Broadcast: _handle_broadcast,
+}

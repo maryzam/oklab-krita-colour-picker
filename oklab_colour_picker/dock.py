@@ -71,26 +71,19 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
     def __init__(self, controller: DockController, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._controller = controller
-        # NOT an authoritative copy (north-star §2.5): a write-only perf cache
-        # of the last broadcast colour, used solely to seed lazily-created
-        # tabs without re-reading the controller. Never read by preview/commit.
-        self._last_shown = _selected_or_default(controller.selected_colour)
+        self._view_seed_colour = _selected_or_default(controller.selected_colour)
         self._selector_modes = tuple(SelectorMode)
         self._tabs = QtWidgets.QTabWidget(self)
         self._selectors: dict[SelectorMode, QtWidgets.QWidget] = {}
         self._readout_panel = ReadoutPanel(self)
         self._readout_panel.previewed.connect(self._preview_colour)
         self._readout_panel.committed.connect(self._commit_colour)
-        self._colour_listener = self._on_colour_changed
         self._build_selector_tabs()
         self._build_layout()
         self._tabs.currentChanged.connect(self._ensure_selector_for_tab)
-        self._readout_panel.set_current_colour(self._last_shown)
-        # Seed previous swatch with the initial foreground so the first
-        # display has a meaningful revert target (current == previous).
-        self._readout_panel.set_previous_colour(self._last_shown)
-        self._controller.add_colour_listener(self._colour_listener)
-        self.destroyed.connect(self._remove_colour_listener)
+        self._seed_readout_panel(self._view_seed_colour)
+        self._controller_subscription = ColourSubscription(controller, self._on_colour_changed)
+        self.destroyed.connect(self._controller_subscription.disconnect)
 
     @property
     def selector_widgets(self) -> tuple[SelectorWidget, ...]:
@@ -118,9 +111,6 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
     def set_selected_colour(
         self, oklab: Sequence[float] | None, *, committed: bool = True
     ) -> None:
-        """Programmatic/seed entry point. Routes through the same one-way view
-        broadcast as a controller change (no separate echo path)."""
-
         if oklab is None:
             return
         self._show_on_views(
@@ -128,24 +118,13 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         )
 
     def _on_colour_changed(self, oklab: Sequence[float], kind: ChangeKind) -> None:
-        """The single controller listener. The dock is a dumb broadcaster: it
-        forwards to every view uniformly and never special-cases the source
-        (north-star §2.1 / §2.4)."""
-
         self._show_on_views(_as_oklab(oklab), kind)
 
     def _show_on_views(self, colour: np.ndarray, kind: ChangeKind) -> None:
-        # Write-only perf cache for seeding future lazy tabs (§2.5).
-        self._last_shown = colour
+        self._view_seed_colour = colour
         for mode, widget in self._selectors.items():
-            # PR-2 model-rebuild policy (north-star §5 row 2): the dock offers
-            # a per-mode slice-model *thunk*; the widget's state machine
-            # decides whether the broadcast is rendered and only then builds
-            # and adopts the model. A swallowed PINNED echo or an ignored
-            # in-flight broadcast never even constructs it (INV-3, perf).
-            # Slice 4 only adds caching to the thunk, not this policy.
             widget.apply_broadcast(
-                colour, kind, lambda m=mode, c=colour: _model_for_colour(m, c)
+                colour, kind, self._selector_model_factory(mode, colour)
             )
         self._readout_panel.set_current_colour(
             colour, committed=kind is not ChangeKind.PREVIEW
@@ -169,12 +148,10 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         if existing is not None:
             return existing
 
-        seed = self._last_shown
+        seed = self._view_seed_colour
         widget = _build_selector_widget(mode, _model_for_colour(mode, seed), self)
         widget.setObjectName(MODE_OBJECT_NAMES[mode])
-        # A lazily-created tab seeds itself from the replayable controller
-        # state, then receives all subsequent broadcasts (§2.5).
-        widget.show_colour(seed, ChangeKind.INITIAL)
+        self._seed_selector(widget, seed)
         widget.previewed.connect(self._preview_colour)
         widget.committed.connect(self._commit_colour)
         self._selectors[mode] = widget
@@ -183,8 +160,6 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         if index < self._tabs.count():
             current_index = self._tabs.currentIndex()
             placeholder = self._tabs.widget(index)
-            # Replacing the placeholder may re-emit currentChanged; the
-            # existing-widget early return above keeps that re-entry harmless.
             self._tabs.removeTab(index)
             self._tabs.insertTab(index, widget, MODE_LABELS[mode])
             if placeholder is not None:
@@ -203,24 +178,42 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         layout.addWidget(self._tabs)
         layout.addWidget(self._readout_panel)
 
+    def _selector_model_factory(self, mode: SelectorMode, colour: np.ndarray) -> Callable[[], object]:
+        return lambda: _model_for_colour(mode, colour)
+
+    def _seed_selector(self, widget: SelectorWidget, colour: np.ndarray) -> None:
+        widget.show_colour(colour, ChangeKind.INITIAL)
+
+    def _seed_readout_panel(self, colour: np.ndarray) -> None:
+        self._readout_panel.set_current_colour(colour)
+        self._readout_panel.set_previous_colour(colour)
+
     def _preview_colour(self, oklab: Sequence[float] | None) -> None:
-        # Intent only: the controller decides the next state and broadcasts
-        # back to every view (including the emitter). No dock-side echo.
         self._controller.set_preview_colour(oklab)
 
     def _commit_colour(self, oklab: Sequence[float] | None) -> None:
         self._controller.request_foreground_commit(oklab)
 
-    def _remove_colour_listener(self) -> None:
-        try:
-            self._controller.remove_colour_listener(self._colour_listener)
-        except (AttributeError, ValueError, RuntimeError):
-            pass
-
-
 def connect_dock_visibility(dock_widget, controller: DockController) -> "VisibilityConnection":
     dock_widget.visibilityChanged.connect(controller.set_dock_visible)
     return VisibilityConnection(dock_widget.visibilityChanged, controller.set_dock_visible)
+
+
+class ColourSubscription:
+    def __init__(self, controller: DockController, listener: ColourListener) -> None:
+        self._controller = controller
+        self._listener = listener
+        self._connected = True
+        self._controller.add_colour_listener(self._listener)
+
+    def disconnect(self, *_args) -> None:
+        if not self._connected:
+            return
+        try:
+            self._controller.remove_colour_listener(self._listener)
+        except (AttributeError, ValueError, RuntimeError):
+            pass
+        self._connected = False
 
 
 class VisibilityConnection:

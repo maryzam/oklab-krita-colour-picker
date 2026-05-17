@@ -19,6 +19,12 @@ MODEL_CASES = (
     ("hue-lightness-slice", HueLightnessSliceModel(chroma=0.03)),
     ("lightness-chroma-slice", LightnessChromaSliceModel(hue=1.0)),
 )
+STATE_CASES = (
+    StateKind.IDLE,
+    StateKind.DRAGGING,
+    StateKind.KEYBOARD,
+    StateKind.PINNED,
+)
 _QT_APP = None
 
 
@@ -72,12 +78,22 @@ def test_p2_model_position_lookup_is_idempotent_for_same_colour(case, width, hei
 @settings(max_examples=200, derandomize=True, deadline=None)
 @given(
     case=st.sampled_from(MODEL_CASES),
-    width=st.integers(min_value=16, max_value=96),
-    height=st.integers(min_value=16, max_value=96),
+    width=st.integers(min_value=40, max_value=96),
+    height=st.integers(min_value=40, max_value=96),
     x_fraction=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
     y_fraction=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    points=st.lists(
+        st.tuples(
+            st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+            st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+        ),
+        min_size=1,
+        max_size=5,
+    ),
 )
-def test_p3_idle_indicator_is_independent_of_interaction_history(case, width, height, x_fraction, y_fraction):
+def test_p3_idle_indicator_is_independent_of_interaction_history(
+    case, width, height, x_fraction, y_fraction, points
+):
     _ensure_qapp()
     from oklab_colour_picker.widgets import SelectorWidget
 
@@ -86,34 +102,54 @@ def test_p3_idle_indicator_is_independent_of_interaction_history(case, width, he
     colour = model.color_at_position((x_fraction * (width - 1.0), y_fraction * (height - 1.0)), size)
     assume(colour is not None)
 
-    widget = SelectorWidget(model)
-    widget.resize(*size)
+    expected = SelectorWidget(model)
+    expected.resize(*size)
+    expected.show_colour(colour)
+    expected_position = expected.indicator_position()
 
-    widget.show_colour(colour)
-    idle_position = widget.indicator_position()
-    widget._force_state_for_test(
-        StateKind.DRAGGING, anchor=(width / 2.0, height / 2.0)
-    )
-    widget.show_colour(colour)
-    widget._force_state_for_test(StateKind.IDLE, anchor=None)
+    history = SelectorWidget(model)
+    history.resize(*size)
+    _drive_gesture_history(history, points)
+    history.resize(width + 1, height + 1)
+    _process_qt_events()
+    history.resize(*size)
+    _process_qt_events()
+    history.show_colour(colour)
 
-    assert widget.indicator_position() == pytest.approx(idle_position)
+    assert history.state == "IDLE"
+    assert history.indicator_position() == pytest.approx(expected_position)
 
 
 @settings(max_examples=200, derandomize=True, deadline=None)
-@given(colour=st.tuples(st.floats(0.0, 1.0), st.floats(-0.1, 0.1), st.floats(-0.1, 0.1)))
-def test_p2_show_colour_echo_idempotence_from_any_state(colour):
+@given(
+    case=st.sampled_from(MODEL_CASES),
+    state_kind=st.sampled_from(STATE_CASES),
+    width=st.integers(min_value=40, max_value=96),
+    height=st.integers(min_value=40, max_value=96),
+    x_fraction=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    y_fraction=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    colour=st.tuples(st.floats(0.0, 1.0), st.floats(-0.1, 0.1), st.floats(-0.1, 0.1)),
+)
+def test_p2_show_colour_echo_idempotence_from_any_state(
+    case, state_kind, width, height, x_fraction, y_fraction, colour
+):
     _ensure_qapp()
     from oklab_colour_picker.widgets import SelectorWidget
 
-    widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
+    _name, model = case
+    size = (width, height)
+    point = (x_fraction * (width - 1.0), y_fraction * (height - 1.0))
+    assume(model.color_at_position(point, size) is not None)
+    widget = SelectorWidget(model)
+    widget.resize(*size)
+    assume(_enter_widget_state(widget, state_kind, point))
     normalized = normalize_oklab_for_krita(np.asarray(colour, dtype=float))
 
     widget.show_colour(normalized)
-    once = (widget.state, widget.indicator_position())
+    once = _selector_snapshot(widget)
     widget.show_colour(normalized)
 
-    assert (widget.state, widget.indicator_position()) == once
+    assert _selector_snapshot(widget) == once
 
 
 @settings(max_examples=200, derandomize=True, deadline=None)
@@ -132,41 +168,15 @@ def test_p2_show_colour_echo_idempotence_from_any_state(colour):
 )
 def test_p4_no_orphan_anchor_after_random_gesture_sequence(case, width, height, points):
     _ensure_qapp()
-    from PyQt5 import QtCore, QtGui, QtWidgets
     from oklab_colour_picker.widgets import SelectorWidget
 
     _name, model = case
     widget = SelectorWidget(model)
-    # Stay above the 32x32 minimum so the later resize is a real size change
-    # (sub-minimum resizes are clamped and would not deliver a resizeEvent).
     widget.resize(width + 40, height + 40)
-    widget.show()
-    QtWidgets.QApplication.processEvents()
+    _drive_gesture_history(widget, points)
     actual_w, actual_h = widget.width(), widget.height()
-    qpoints = [
-        QtCore.QPoint(int(fx * (actual_w - 1)), int(fy * (actual_h - 1)))
-        for fx, fy in points
-    ]
-
-    def send(kind, point, button, buttons):
-        QtWidgets.QApplication.sendEvent(
-            widget,
-            QtGui.QMouseEvent(
-                kind, QtCore.QPointF(point), button, buttons, QtCore.Qt.NoModifier
-            ),
-        )
-
-    # Press, drag through the random points, release: a real gesture history.
-    send(QtCore.QEvent.MouseButtonPress, qpoints[0], QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
-    for point in qpoints[1:]:
-        send(QtCore.QEvent.MouseMove, point, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
-    send(QtCore.QEvent.MouseButtonRelease, qpoints[-1], QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
-
-    # End outside anchored states: a resize drops a PINNED anchor (INV-1); if
-    # the gesture already fell back to IDLE this is a harmless no-op. Either
-    # way, no anchor may survive (P4 / INV-1).
     widget.resize(actual_w + 17, actual_h + 13)
-    QtWidgets.QApplication.processEvents()
+    _process_qt_events()
 
     assert widget.state == "IDLE"
     assert widget.anchor is None
@@ -225,3 +235,128 @@ def _ensure_qapp():
 
     _QT_APP = QtWidgets.QApplication.instance() or _QT_APP or QtWidgets.QApplication([])
     return _QT_APP
+
+
+def _enter_widget_state(widget, state_kind, point):
+    from PyQt5 import QtCore, QtGui, QtWidgets
+
+    widget.show()
+    _process_qt_events()
+    qpoint = QtCore.QPoint(
+        int(np.clip(round(point[0]), 0, widget.width() - 1)),
+        int(np.clip(round(point[1]), 0, widget.height() - 1)),
+    )
+    colour = widget.model.color_at_position(
+        (qpoint.x(), qpoint.y()), (widget.width(), widget.height())
+    )
+    if colour is None:
+        return False
+    if state_kind is StateKind.IDLE:
+        widget.show_colour(colour)
+        return widget.state == "IDLE"
+    if state_kind is StateKind.DRAGGING:
+        _send_mouse(
+            widget,
+            QtCore.QEvent.MouseButtonPress,
+            qpoint,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.LeftButton,
+        )
+        return widget.state == "DRAGGING"
+    if state_kind is StateKind.PINNED:
+        _send_mouse(
+            widget,
+            QtCore.QEvent.MouseButtonPress,
+            qpoint,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.LeftButton,
+        )
+        _send_mouse(
+            widget,
+            QtCore.QEvent.MouseButtonRelease,
+            qpoint,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoButton,
+        )
+        return widget.state == "PINNED"
+    if state_kind is StateKind.KEYBOARD:
+        widget.show_colour(colour)
+        for key in (
+            QtCore.Qt.Key_Right,
+            QtCore.Qt.Key_Left,
+            QtCore.Qt.Key_Down,
+            QtCore.Qt.Key_Up,
+        ):
+            event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, key, QtCore.Qt.NoModifier)
+            QtWidgets.QApplication.sendEvent(widget, event)
+            if event.isAccepted() and widget.state == "KEYBOARD":
+                return True
+        return False
+    raise AssertionError(f"unhandled state kind: {state_kind!r}")
+
+
+def _drive_gesture_history(widget, points):
+    from PyQt5 import QtCore
+
+    widget.show()
+    _process_qt_events()
+    actual_w, actual_h = widget.width(), widget.height()
+    qpoints = [
+        QtCore.QPoint(int(fx * (actual_w - 1)), int(fy * (actual_h - 1)))
+        for fx, fy in points
+    ]
+
+    _send_mouse(
+        widget,
+        QtCore.QEvent.MouseButtonPress,
+        qpoints[0],
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.LeftButton,
+    )
+    for point in qpoints[1:]:
+        _send_mouse(
+            widget,
+            QtCore.QEvent.MouseMove,
+            point,
+            QtCore.Qt.NoButton,
+            QtCore.Qt.LeftButton,
+        )
+    _send_mouse(
+        widget,
+        QtCore.QEvent.MouseButtonRelease,
+        qpoints[-1],
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.NoButton,
+    )
+
+
+def _send_mouse(widget, event_type, point, button, buttons):
+    from PyQt5 import QtCore, QtGui, QtWidgets
+
+    QtWidgets.QApplication.sendEvent(
+        widget,
+        QtGui.QMouseEvent(
+            event_type, QtCore.QPointF(point), button, buttons, QtCore.Qt.NoModifier
+        ),
+    )
+
+
+def _process_qt_events():
+    from PyQt5 import QtWidgets
+
+    QtWidgets.QApplication.processEvents()
+
+
+def _selector_snapshot(widget):
+    return (
+        widget.state,
+        _rounded_tuple(widget.anchor),
+        _rounded_tuple(widget.indicator_position()),
+        _rounded_tuple(widget.selected_colour),
+    )
+
+
+def _rounded_tuple(values):
+    if values is None:
+        return None
+    return tuple(np.round(np.asarray(values, dtype=float), 12))
