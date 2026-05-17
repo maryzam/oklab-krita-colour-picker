@@ -15,6 +15,7 @@ KRITA_IMPORT_ALLOWED = {
 PURE_NO_QT_OR_KRITA = {
     Path("oklab_colour_picker/color_math.py"),
     Path("oklab_colour_picker/renderers.py"),
+    Path("oklab_colour_picker/selector_interaction.py"),
     Path("oklab_colour_picker/selector_models.py"),
     Path("oklab_colour_picker/models/__init__.py"),
     Path("oklab_colour_picker/models/base.py"),
@@ -30,6 +31,7 @@ SET_FOREGROUND_ALLOWED = {
 LOWER_LAYER_FILES = {
     Path("oklab_colour_picker/color_math.py"),
     Path("oklab_colour_picker/renderers.py"),
+    Path("oklab_colour_picker/selector_interaction.py"),
     Path("oklab_colour_picker/selector_models.py"),
     Path("oklab_colour_picker/models/__init__.py"),
     Path("oklab_colour_picker/models/base.py"),
@@ -43,6 +45,7 @@ LOWER_LAYER_TESTS = {
     "oklab_colour_picker.color_math": Path("tests/test_color_math.py"),
     "oklab_colour_picker.models": Path("tests/test_selector_models.py"),
     "oklab_colour_picker.renderers": Path("tests/test_renderers.py"),
+    "oklab_colour_picker.selector_interaction": Path("tests/test_selector_interaction.py"),
     "oklab_colour_picker.selector_models": Path("tests/test_selector_models.py"),
     "oklab_colour_picker.controller": Path("tests/test_controller.py"),
 }

@@ -17,7 +17,7 @@ from oklab_colour_picker.selector_models import (
     LightnessSliceModel,
 )
 from oklab_colour_picker.widgets.readout_panel import ReadoutPanel
-from oklab_colour_picker.widgets.selector import DRAGGING, KEYBOARD, SelectorWidget
+from oklab_colour_picker.widgets.selector import SelectorWidget
 
 
 ColourListener = Callable[[np.ndarray, ChangeKind], None]
@@ -138,17 +138,15 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         # Write-only perf cache for seeding future lazy tabs (§2.5).
         self._last_shown = colour
         for mode, widget in self._selectors.items():
-            # PR-2 model-rebuild policy (north-star §5 row 2): the dock builds
-            # the per-mode slice model from each broadcast colour, but the
-            # *widget* decides whether to apply it. A view mid-gesture
-            # (DRAGGING/KEYBOARD) is never disturbed — and is not even rebuilt
-            # — its state machine owns the interaction until release (§3.5).
-            # Crucially, the model is passed *into* show_colour so a swallowed
-            # PINNED echo never triggers a model reset (INV-3). Slice 4 only
-            # optimizes the rebuild caching, not this policy.
-            if widget.state in (DRAGGING, KEYBOARD):
-                continue
-            widget.show_colour(colour, kind, model=_model_for_colour(mode, colour))
+            # PR-2 model-rebuild policy (north-star §5 row 2): the dock offers
+            # a per-mode slice-model *thunk*; the widget's state machine
+            # decides whether the broadcast is rendered and only then builds
+            # and adopts the model. A swallowed PINNED echo or an ignored
+            # in-flight broadcast never even constructs it (INV-3, perf).
+            # Slice 4 only adds caching to the thunk, not this policy.
+            widget.apply_broadcast(
+                colour, kind, lambda m=mode, c=colour: _model_for_colour(m, c)
+            )
         self._readout_panel.set_current_colour(
             colour, committed=kind is not ChangeKind.PREVIEW
         )
