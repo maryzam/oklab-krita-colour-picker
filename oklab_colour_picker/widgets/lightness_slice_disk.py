@@ -30,8 +30,8 @@ from PyQt5 import QtCore, QtGui
 from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
     LightnessSliceModel,
+    disk_geometry,
 )
-from oklab_colour_picker.models.geometry import disk_geometry
 from oklab_colour_picker.widgets.selector import SelectorWidget
 
 

@@ -21,6 +21,8 @@ class IndicatorSpec:
     ``desired`` is where the colour mathematically belongs on this selector.
     ``snapped`` is set only when an out-of-gamut colour needs a second marker
     at the nearest selectable position.
+    ``out_of_gamut`` means the dual-ring cue is active; it is not a general
+    predicate for whether the source colour is outside the model gamut.
     """
 
     desired: Position

@@ -5,12 +5,14 @@ import pytest
 
 from oklab_colour_picker import color_math
 from oklab_colour_picker import models as selector_model_package
+from oklab_colour_picker import selector_models as selector_model_facade
 from oklab_colour_picker.selector_models import (
     IndicatorSpec,
     LightnessChromaSliceModel,
     HueLightnessSliceModel,
     LightnessSliceModel,
     SelectorModel,
+    disk_geometry,
 )
 
 
@@ -18,6 +20,7 @@ def test_selector_models_facade_exports_model_package_contract():
     assert selector_model_package.IndicatorSpec is IndicatorSpec
     assert selector_model_package.SelectorModel is SelectorModel
     assert selector_model_package.LightnessSliceModel is LightnessSliceModel
+    assert selector_model_facade.disk_geometry is disk_geometry
 
 
 def test_lightness_slice_maps_center_to_neutral_current_lightness():

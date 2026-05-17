@@ -9,9 +9,15 @@ from oklab_colour_picker.models import (
     SelectorModel,
     Size,
 )
-from oklab_colour_picker.models.geometry import position_from_circle as _position_from_circle
+from oklab_colour_picker.models.geometry import (
+    disk_geometry,
+    position_from_circle as _position_from_circle,
+)
+
+# Compatibility export named in the north-star model-contract slice.
 
 __all__ = [
+    "disk_geometry",
     "HueLightnessSliceModel",
     "IndicatorSpec",
     "LightnessChromaSliceModel",
