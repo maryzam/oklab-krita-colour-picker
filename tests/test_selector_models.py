@@ -521,3 +521,17 @@ def test_lightness_slice_indicator_contract_combines_desired_and_snapped_positio
     np.testing.assert_allclose(indicator.desired, (100.0, 50.0), atol=1e-9)
     assert indicator.snapped is not None
     assert 50.0 < indicator.snapped[0] < 100.0
+
+
+def test_indicator_contract_preserves_snapped_only_fallback():
+    model = LightnessSliceModel(lightness=0.5)
+    oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA * 1.5, 0.0])
+    assert model.position_for_color(oklab, (101.0, 101.0)) is None
+
+    indicator = model.indicator_for_color(oklab, (101.0, 101.0))
+
+    assert indicator is not None
+    assert indicator.snapped is None
+    assert indicator.out_of_gamut is False
+    assert 50.0 < indicator.desired[0] < 100.0
+    assert indicator.desired[1] == pytest.approx(50.0, abs=1e-9)

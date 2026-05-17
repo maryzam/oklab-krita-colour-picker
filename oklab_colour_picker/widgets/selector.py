@@ -72,8 +72,7 @@ class SelectorWidget(QtWidgets.QWidget):
         override = self._interaction_indicator_position()
         if override is not None:
             return override
-        indicator = self._model.indicator_for_color(self._selected_colour, _widget_size(self))
-        return None if indicator is None else indicator.desired
+        return self._model.position_for_color(self._selected_colour, _widget_size(self))
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)

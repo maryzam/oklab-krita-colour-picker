@@ -71,7 +71,9 @@ def indicator_from_positions(
     snapped: Position | None,
 ) -> IndicatorSpec | None:
     if desired is None:
-        return None
+        if snapped is None:
+            return None
+        return IndicatorSpec(desired=snapped)
     if snapped is not None and not positions_close(desired, snapped):
         return IndicatorSpec(desired=desired, snapped=snapped, out_of_gamut=True)
     return IndicatorSpec(desired=desired)
