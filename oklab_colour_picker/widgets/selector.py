@@ -2,23 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from typing import Sequence
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import renderers
-
-
-class SelectorModel(Protocol):
-    def color_at_position(self, position: Sequence[float], size: Sequence[float]) -> np.ndarray | None:
-        ...
-
-    def position_for_color(self, oklab: Sequence[float], size: Sequence[float]) -> tuple[float, float] | None:
-        ...
-
-    def colors_at_positions(self, x, y, size: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
-        ...
+from oklab_colour_picker.selector_models import IndicatorSpec, SelectorModel
 
 
 class SelectorWidget(QtWidgets.QWidget):
@@ -82,7 +72,8 @@ class SelectorWidget(QtWidgets.QWidget):
         override = self._interaction_indicator_position()
         if override is not None:
             return override
-        return self._model.position_for_color(self._selected_colour, _widget_size(self))
+        indicator = self._model.indicator_for_color(self._selected_colour, _widget_size(self))
+        return None if indicator is None else indicator.desired
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
@@ -217,10 +208,7 @@ class SelectorWidget(QtWidgets.QWidget):
         return self._snapped_colour_at(point)
 
     def _snapped_colour_at(self, point: QtCore.QPoint) -> np.ndarray | None:
-        snapper = getattr(self._model, "snapped_color_at_position", None)
-        if not callable(snapper):
-            return None
-        return snapper((point.x(), point.y()), _widget_size(self))
+        return self._model.snapped_color_at_position((point.x(), point.y()), _widget_size(self))
 
     def _keyboard_target_position(
         self,
@@ -288,24 +276,22 @@ class SelectorWidget(QtWidgets.QWidget):
             self._stroke_circle(painter, override, solid=True)
             return
 
-        desired = self._desired_indicator_position()
-        snapped = self._snapped_indicator_position()
-        if desired is None and snapped is None:
+        indicator = self._indicator_spec()
+        if indicator is None:
             return
 
         painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
         painter.setBrush(QtCore.Qt.NoBrush)
 
-        if desired is not None and snapped is not None and not _positions_close(desired, snapped):
+        if indicator.snapped is not None and indicator.out_of_gamut:
             # Out of gamut on this slice: solid ring at the desired position
             # (where the stored colour wants to be), dashed ring at the
             # snapped fallback position the user will actually paint with.
-            self._stroke_circle(painter, desired, solid=True)
-            self._stroke_circle(painter, snapped, solid=False)
+            self._stroke_circle(painter, indicator.desired, solid=True)
+            self._stroke_circle(painter, indicator.snapped, solid=False)
             return
 
-        position = desired if desired is not None else snapped
-        self._stroke_circle(painter, position, solid=True)
+        self._stroke_circle(painter, indicator.desired, solid=True)
 
     def _record_interaction_position(self, point: QtCore.QPoint, colour: np.ndarray) -> None:
         # Only trust the click point as the indicator location when the model
@@ -331,21 +317,10 @@ class SelectorWidget(QtWidgets.QWidget):
         # set_model), so it is safe to use without re-verifying here.
         return self._last_interaction_position
 
-    def _desired_indicator_position(self) -> tuple[float, float] | None:
+    def _indicator_spec(self) -> IndicatorSpec | None:
         if self._selected_colour is None:
             return None
-        helper = getattr(self._model, "desired_position_for_color", None)
-        if callable(helper):
-            return helper(self._selected_colour, _widget_size(self))
-        return self._model.position_for_color(self._selected_colour, _widget_size(self))
-
-    def _snapped_indicator_position(self) -> tuple[float, float] | None:
-        if self._selected_colour is None:
-            return None
-        helper = getattr(self._model, "snapped_position_for_color", None)
-        if callable(helper):
-            return helper(self._selected_colour, _widget_size(self))
-        return self._model.position_for_color(self._selected_colour, _widget_size(self))
+        return self._model.indicator_for_color(self._selected_colour, _widget_size(self))
 
     def _stroke_circle(
         self, painter: QtGui.QPainter, position: tuple[float, float], *, solid: bool
@@ -406,10 +381,6 @@ def _as_oklab(oklab: Sequence[float] | None) -> np.ndarray | None:
     if colour.shape != (3,):
         raise ValueError("OKLab colour must contain exactly three components")
     return colour.copy()
-
-
-def _positions_close(a: tuple[float, float], b: tuple[float, float]) -> bool:
-    return abs(a[0] - b[0]) <= 0.5 and abs(a[1] - b[1]) <= 0.5
 
 
 def _keyboard_step(size: QtCore.QSize, modifiers: QtCore.Qt.KeyboardModifiers) -> int:

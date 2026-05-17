@@ -31,6 +31,7 @@ from oklab_colour_picker import color_math
 from oklab_colour_picker.selector_models import (
     LightnessSliceModel,
 )
+from oklab_colour_picker.models.geometry import disk_geometry
 from oklab_colour_picker.widgets.selector import SelectorWidget
 
 
@@ -55,15 +56,6 @@ class LightnessSliceDiskWidget(SelectorWidget):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         self._invalidate_gamut_path()
-
-    def _snapped_colour_at(self, point):
-        if isinstance(self._model, LightnessSliceModel):
-            snapped = self._model.snapped_color_at_position(
-                (point.x(), point.y()), (self.width(), self.height())
-            )
-            if snapped is not None:
-                return snapped
-        return super()._snapped_colour_at(point)
 
     def _paint_indicator(self, painter: QtGui.QPainter) -> None:
         # Drawing overlays here (instead of overriding paintEvent) keeps the
@@ -165,15 +157,7 @@ class LightnessSliceDiskWidget(SelectorWidget):
         return self._gamut_contour_cache
 
     def _disk_geometry(self) -> tuple[float, float, float] | None:
-        width, height = self.width(), self.height()
-        if width <= 1 or height <= 1:
-            return None
-        radius = (min(width, height) - 1) / 2.0
-        if radius <= 0.0:
-            return None
-        cx = (width - 1) / 2.0
-        cy = (height - 1) / 2.0
-        return cx, cy, radius
+        return disk_geometry((self.width(), self.height()))
 
     def _invalidate_gamut_path(self) -> None:
         self._gamut_path_cache_key = None

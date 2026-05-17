@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PyQt5 import QtCore, QtGui
 
+from oklab_colour_picker.models.geometry import disk_geometry
 from oklab_colour_picker.selector_models import HueLightnessSliceModel
 from oklab_colour_picker.widgets.selector import SelectorWidget
 
@@ -44,12 +45,4 @@ class HueLightnessSliceDiskWidget(SelectorWidget):
         painter.restore()
 
     def _disk_geometry(self) -> tuple[float, float, float] | None:
-        width, height = self.width(), self.height()
-        if width <= 1 or height <= 1:
-            return None
-        radius = (min(width, height) - 1) / 2.0
-        if radius <= 0.0:
-            return None
-        cx = (width - 1) / 2.0
-        cy = (height - 1) / 2.0
-        return cx, cy, radius
+        return disk_geometry((self.width(), self.height()))
