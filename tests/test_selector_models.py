@@ -384,6 +384,26 @@ def test_hue_lightness_slice_rejects_color_with_mismatched_chroma():
 # -- fallback indicator helpers --------------------------------------------
 
 
+@pytest.mark.xfail(strict=True, reason="PR-1 / §2.3: SelectorModel ABC and IndicatorSpec contract not implemented yet")
+def test_selector_model_default_indicator_uses_position_for_color():
+    from oklab_colour_picker.selector_models import IndicatorSpec, SelectorModel
+
+    class LinearSelectorModel(SelectorModel):
+        def color_at_position(self, position, size):
+            return np.array([0.5, 0.0, 0.0])
+
+        def colors_at_positions(self, x, y, size):
+            return np.zeros(np.asarray(x).shape + (3,), dtype=float), np.ones(np.asarray(x).shape, dtype=bool)
+
+        def position_for_color(self, oklab, size):
+            return 2.0, 3.0
+
+    indicator = LinearSelectorModel().indicator_for_color([0.5, 0.0, 0.0], (10.0, 10.0))
+    assert indicator == IndicatorSpec(desired=(2.0, 3.0))
+    assert indicator.snapped is None
+    assert indicator.out_of_gamut is False
+
+
 def test_lightness_slice_desired_position_returns_out_of_leaf_location():
     # At L=0.5, hue=0 the cusp chroma is below SRGB_MAX_CHROMA, so a colour at
     # SRGB_MAX_CHROMA is OOG on this slice and position_for_color returns None.
@@ -467,3 +487,17 @@ def test_lightness_chroma_slice_helpers_reject_mismatched_hue():
     oklab = color_math.oklch_to_oklab([0.5, 0.05, math.pi / 2.0])
     assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
     assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None
+
+
+@pytest.mark.xfail(strict=True, reason="PR-1 / §2.3: indicator_for_color should replace desired/snapped helper probes")
+def test_lightness_slice_indicator_contract_combines_desired_and_snapped_positions():
+    model = LightnessSliceModel(lightness=0.5)
+    oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
+
+    indicator = model.indicator_for_color(oklab, (101.0, 101.0))
+
+    assert indicator is not None
+    assert indicator.out_of_gamut is True
+    np.testing.assert_allclose(indicator.desired, (100.0, 50.0), atol=1e-9)
+    assert indicator.snapped is not None
+    assert 50.0 < indicator.snapped[0] < 100.0

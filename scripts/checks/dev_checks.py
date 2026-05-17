@@ -32,6 +32,17 @@ SET_FOREGROUND_ALLOWED = {
     Path("oklab_colour_picker/controller.py"),
     Path("oklab_colour_picker/krita_adapter.py"),
 }
+LOWER_LAYER_FILES = {
+    Path("oklab_colour_picker/color_math.py"),
+    Path("oklab_colour_picker/renderers.py"),
+    Path("oklab_colour_picker/selector_models.py"),
+    Path("oklab_colour_picker/controller.py"),
+}
+UI_LAYER_MODULE_PREFIXES = (
+    "oklab_colour_picker.dock",
+    "oklab_colour_picker.plugin",
+    "oklab_colour_picker.widgets",
+)
 
 
 @dataclass(frozen=True)
@@ -136,6 +147,11 @@ def check_python_rules(sources: list[SourceFile]) -> int:
                 if rp in PURE_NO_QT and any(module.startswith(("PyQt5", "krita")) for module in modules):
                     fail(f"{rp}: pure model/math modules must not import Qt or Krita")
                     errors += 1
+                if rp in LOWER_LAYER_FILES:
+                    for module in modules:
+                        if starts_with_any(module, UI_LAYER_MODULE_PREFIXES):
+                            fail(f"{rp}: lower layers must not import widget/dock/plugin layers")
+                            errors += 1
 
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
@@ -148,6 +164,11 @@ def check_python_rules(sources: list[SourceFile]) -> int:
                 if rp in PURE_NO_QT and module.startswith(("PyQt5", "krita")):
                     fail(f"{rp}: pure model/math modules must not import Qt or Krita")
                     errors += 1
+                if rp in LOWER_LAYER_FILES:
+                    for imported_module in project_import_references(node, rp):
+                        if starts_with_any(imported_module, UI_LAYER_MODULE_PREFIXES):
+                            fail(f"{rp}: lower layers must not import widget/dock/plugin layers")
+                            errors += 1
 
             if not isinstance(node, ast.Call):
                 continue
@@ -186,6 +207,30 @@ def check_formatting(sources: list[SourceFile]) -> int:
                 fail(f"{rp}:{line_no}: trailing whitespace is not allowed")
                 errors += 1
     return errors
+
+
+def project_import_references(node: ast.ImportFrom, source_path: Path) -> list[str]:
+    module = node.module or ""
+    if node.level:
+        base = ".".join(_relative_import_base(source_path, node.level))
+        resolved_module = ".".join(part for part in (base, module) if part)
+        if module:
+            return [resolved_module, *[f"{resolved_module}.{alias.name}" for alias in node.names]]
+        return [f"{base}.{alias.name}" for alias in node.names]
+    if module != "oklab_colour_picker":
+        return [module]
+    return [f"{module}.{alias.name}" for alias in node.names]
+
+
+def _relative_import_base(source_path: Path, level: int) -> tuple[str, ...]:
+    module_parts = source_path.with_suffix("").parts
+    package_parts = module_parts[:-1]
+    keep = max(0, len(package_parts) - level + 1)
+    return package_parts[:keep]
+
+
+def starts_with_any(module: str, prefixes: tuple[str, ...]) -> bool:
+    return any(module == prefix or module.startswith(f"{prefix}.") for prefix in prefixes)
 
 
 def run_pytest() -> int:
