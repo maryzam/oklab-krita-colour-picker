@@ -16,6 +16,12 @@ PURE_NO_QT_OR_KRITA = {
     Path("oklab_colour_picker/color_math.py"),
     Path("oklab_colour_picker/renderers.py"),
     Path("oklab_colour_picker/selector_models.py"),
+    Path("oklab_colour_picker/models/__init__.py"),
+    Path("oklab_colour_picker/models/base.py"),
+    Path("oklab_colour_picker/models/geometry.py"),
+    Path("oklab_colour_picker/models/hue_lightness_slice.py"),
+    Path("oklab_colour_picker/models/lightness_chroma_slice.py"),
+    Path("oklab_colour_picker/models/lightness_slice.py"),
 }
 SET_FOREGROUND_ALLOWED = {
     Path("oklab_colour_picker/controller.py"),
@@ -25,10 +31,17 @@ LOWER_LAYER_FILES = {
     Path("oklab_colour_picker/color_math.py"),
     Path("oklab_colour_picker/renderers.py"),
     Path("oklab_colour_picker/selector_models.py"),
+    Path("oklab_colour_picker/models/__init__.py"),
+    Path("oklab_colour_picker/models/base.py"),
+    Path("oklab_colour_picker/models/geometry.py"),
+    Path("oklab_colour_picker/models/hue_lightness_slice.py"),
+    Path("oklab_colour_picker/models/lightness_chroma_slice.py"),
+    Path("oklab_colour_picker/models/lightness_slice.py"),
     Path("oklab_colour_picker/controller.py"),
 }
 LOWER_LAYER_TESTS = {
     "oklab_colour_picker.color_math": Path("tests/test_color_math.py"),
+    "oklab_colour_picker.models": Path("tests/test_selector_models.py"),
     "oklab_colour_picker.renderers": Path("tests/test_renderers.py"),
     "oklab_colour_picker.selector_models": Path("tests/test_selector_models.py"),
     "oklab_colour_picker.controller": Path("tests/test_controller.py"),
@@ -165,7 +178,6 @@ def test_lower_layer_coverage_modules_exist_and_target_the_claimed_layer():
     assert untargeted == []
 
 
-@pytest.mark.xfail(strict=True, reason="PR-1 / §2.3: selector widget still probes optional model helpers")
 def test_selector_widget_uses_explicit_model_contract():
     path = ROOT / "oklab_colour_picker" / "widgets" / "selector.py"
     tree = ast.parse(path.read_text(), filename=path.relative_to(ROOT).as_posix())

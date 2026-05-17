@@ -341,6 +341,20 @@ def test_indicator_position_comes_from_model(qtbot):
     assert widget.indicator_position() == pytest.approx(expected)
 
 
+def test_indicator_position_stays_strict_for_out_of_gamut_leaf_colour(qtbot):
+    widget = SelectorWidget(LightnessSliceModel(lightness=0.5))
+    widget.resize(101, 101)
+    qtbot.addWidget(widget)
+
+    colour = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
+    assert widget.model.position_for_color(colour, _size(widget)) is None
+    assert widget.model.indicator_for_color(colour, _size(widget)) is not None
+
+    widget.set_selected_colour(colour)
+
+    assert widget.indicator_position() is None
+
+
 def test_paint_event_renders_selector_image(qtbot):
     widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(32, 24)

@@ -4,11 +4,23 @@ import numpy as np
 import pytest
 
 from oklab_colour_picker import color_math
+from oklab_colour_picker import models as selector_model_package
+from oklab_colour_picker import selector_models as selector_model_facade
 from oklab_colour_picker.selector_models import (
+    IndicatorSpec,
     LightnessChromaSliceModel,
     HueLightnessSliceModel,
     LightnessSliceModel,
+    SelectorModel,
+    disk_geometry,
 )
+
+
+def test_selector_models_facade_exports_model_package_contract():
+    assert selector_model_package.IndicatorSpec is IndicatorSpec
+    assert selector_model_package.SelectorModel is SelectorModel
+    assert selector_model_package.LightnessSliceModel is LightnessSliceModel
+    assert selector_model_facade.disk_geometry is disk_geometry
 
 
 def test_lightness_slice_maps_center_to_neutral_current_lightness():
@@ -384,10 +396,7 @@ def test_hue_lightness_slice_rejects_color_with_mismatched_chroma():
 # -- fallback indicator helpers --------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="PR-1 / §2.3: SelectorModel ABC and IndicatorSpec contract not implemented yet")
 def test_selector_model_default_indicator_uses_position_for_color():
-    from oklab_colour_picker.selector_models import IndicatorSpec, SelectorModel
-
     class LinearSelectorModel(SelectorModel):
         def color_at_position(self, position, size):
             return np.array([0.5, 0.0, 0.0])
@@ -404,28 +413,44 @@ def test_selector_model_default_indicator_uses_position_for_color():
     assert indicator.out_of_gamut is False
 
 
-def test_lightness_slice_desired_position_returns_out_of_leaf_location():
+def test_selector_model_default_snap_returns_none():
+    class LinearSelectorModel(SelectorModel):
+        def color_at_position(self, position, size):
+            return np.array([0.5, 0.0, 0.0])
+
+        def colors_at_positions(self, x, y, size):
+            return np.zeros(np.asarray(x).shape + (3,), dtype=float), np.ones(np.asarray(x).shape, dtype=bool)
+
+        def position_for_color(self, oklab, size):
+            return 2.0, 3.0
+
+    assert LinearSelectorModel().snapped_color_at_position((1.0, 1.0), (10.0, 10.0)) is None
+
+
+def test_lightness_slice_indicator_returns_out_of_leaf_location():
     # At L=0.5, hue=0 the cusp chroma is below SRGB_MAX_CHROMA, so a colour at
     # SRGB_MAX_CHROMA is OOG on this slice and position_for_color returns None.
     model = LightnessSliceModel(lightness=0.5)
     oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
     assert model.position_for_color(oklab, (101.0, 101.0)) is None
 
-    desired = model.desired_position_for_color(oklab, (101.0, 101.0))
-    assert desired is not None
+    indicator = model.indicator_for_color(oklab, (101.0, 101.0))
+    assert indicator is not None
+    assert indicator.out_of_gamut is True
     # Hue=0 lands on the +x rim of the disk.
-    np.testing.assert_allclose(desired, (100.0, 50.0), atol=1e-9)
+    np.testing.assert_allclose(indicator.desired, (100.0, 50.0), atol=1e-9)
 
 
-def test_lightness_slice_snapped_position_clamps_chroma_to_leaf():
+def test_lightness_slice_indicator_snapped_position_clamps_chroma_to_leaf():
     model = LightnessSliceModel(lightness=0.5)
     oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
-    snapped = model.snapped_position_for_color(oklab, (101.0, 101.0))
-    assert snapped is not None
+    indicator = model.indicator_for_color(oklab, (101.0, 101.0))
+    assert indicator is not None
+    assert indicator.snapped is not None
     # The snapped position must be strictly inside the rim, since the cusp
     # chroma at L=0.5, hue=0 is well below SRGB_MAX_CHROMA.
-    assert 50.0 < snapped[0] < 100.0
-    assert snapped[1] == pytest.approx(50.0, abs=1e-9)
+    assert 50.0 < indicator.snapped[0] < 100.0
+    assert indicator.snapped[1] == pytest.approx(50.0, abs=1e-9)
 
 
 def test_lightness_chroma_slice_desired_and_snapped_for_oog_chroma():
@@ -433,14 +458,14 @@ def test_lightness_chroma_slice_desired_and_snapped_for_oog_chroma():
     oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
     assert model.position_for_color(oklab, (101.0, 101.0)) is None
 
-    desired = model.desired_position_for_color(oklab, (101.0, 101.0))
-    assert desired is not None
-    np.testing.assert_allclose(desired, (100.0, 50.0), atol=1e-9)
+    indicator = model.indicator_for_color(oklab, (101.0, 101.0))
+    assert indicator is not None
+    assert indicator.out_of_gamut is True
+    np.testing.assert_allclose(indicator.desired, (100.0, 50.0), atol=1e-9)
 
-    snapped = model.snapped_position_for_color(oklab, (101.0, 101.0))
-    assert snapped is not None
-    assert 0.0 <= snapped[0] < 100.0
-    assert snapped[1] == pytest.approx(50.0, abs=1e-9)
+    assert indicator.snapped is not None
+    assert 0.0 <= indicator.snapped[0] < 100.0
+    assert indicator.snapped[1] == pytest.approx(50.0, abs=1e-9)
 
 
 def test_hue_lightness_slice_snapped_position_pulls_back_into_gamut():
@@ -453,13 +478,15 @@ def test_hue_lightness_slice_snapped_position_pulls_back_into_gamut():
     oklab = color_math.oklch_to_oklab([0.05, chroma, hue])
     assert model.position_for_color(oklab, (101.0, 101.0)) is None
 
-    snapped = model.snapped_position_for_color(oklab, (101.0, 101.0))
-    assert snapped is not None
+    indicator = model.indicator_for_color(oklab, (101.0, 101.0))
+    assert indicator is not None
+    assert indicator.out_of_gamut is True
+    assert indicator.snapped is not None
     # Hue=0 puts the marker along +x from centre. The snapped lightness must be
     # closer to the centre than the requested L=0.05 (which would lie near the
     # rim at the equivalent normalized radius = 0.95).
     cx, cy = 50.0, 50.0
-    snapped_radius = math.hypot(snapped[0] - cx, cy - snapped[1])
+    snapped_radius = math.hypot(indicator.snapped[0] - cx, cy - indicator.snapped[1])
     desired_radius = (1.0 - 0.05) * 50.0
     assert snapped_radius < desired_radius
 
@@ -469,27 +496,23 @@ def test_lightness_slice_helpers_reject_mismatched_lightness():
     # Colour sits on a different lightness slice; both helpers must reject it
     # so the widget does not paint a stale indicator on the wrong slice.
     oklab = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
-    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
-    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.indicator_for_color(oklab, (101.0, 101.0)) is None
 
 
 def test_hue_lightness_slice_helpers_reject_mismatched_chroma():
     model = HueLightnessSliceModel(chroma=0.05)
     # Colour at a different chroma than this fixed-chroma slice.
     oklab = color_math.oklch_to_oklab([0.5, 0.10, 0.0])
-    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
-    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.indicator_for_color(oklab, (101.0, 101.0)) is None
 
 
 def test_lightness_chroma_slice_helpers_reject_mismatched_hue():
     model = LightnessChromaSliceModel(hue=0.0)
     # Colour on a perpendicular hue plane.
     oklab = color_math.oklch_to_oklab([0.5, 0.05, math.pi / 2.0])
-    assert model.desired_position_for_color(oklab, (101.0, 101.0)) is None
-    assert model.snapped_position_for_color(oklab, (101.0, 101.0)) is None
+    assert model.indicator_for_color(oklab, (101.0, 101.0)) is None
 
 
-@pytest.mark.xfail(strict=True, reason="PR-1 / §2.3: indicator_for_color should replace desired/snapped helper probes")
 def test_lightness_slice_indicator_contract_combines_desired_and_snapped_positions():
     model = LightnessSliceModel(lightness=0.5)
     oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA, 0.0])
@@ -501,3 +524,17 @@ def test_lightness_slice_indicator_contract_combines_desired_and_snapped_positio
     np.testing.assert_allclose(indicator.desired, (100.0, 50.0), atol=1e-9)
     assert indicator.snapped is not None
     assert 50.0 < indicator.snapped[0] < 100.0
+
+
+def test_indicator_contract_preserves_snapped_only_fallback():
+    model = LightnessSliceModel(lightness=0.5)
+    oklab = color_math.oklch_to_oklab([0.5, color_math.SRGB_MAX_CHROMA * 1.5, 0.0])
+    assert model.position_for_color(oklab, (101.0, 101.0)) is None
+
+    indicator = model.indicator_for_color(oklab, (101.0, 101.0))
+
+    assert indicator is not None
+    assert indicator.snapped is None
+    assert indicator.out_of_gamut is False
+    assert 50.0 < indicator.desired[0] < 100.0
+    assert indicator.desired[1] == pytest.approx(50.0, abs=1e-9)
