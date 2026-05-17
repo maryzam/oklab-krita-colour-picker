@@ -102,6 +102,29 @@ def test_external_foreground_sync_updates_selected_colour_once():
     assert observed[0][1] is ChangeKind.EXTERNAL
 
 
+def test_subscribe_replays_initial_seed_for_listeners_added_after_startup():
+    adapter = FakeKritaAdapter()
+    external = np.array([0.4, -0.03, 0.07])
+    adapter.foreground_colour = external
+    controller = ColourPickerController(adapter, scheduler=FakeScheduler())
+    observed = []
+
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
+
+    assert len(observed) == 1
+    np.testing.assert_allclose(observed[0][0], external)
+    assert observed[0][1] is ChangeKind.INITIAL
+
+
+def test_subscribe_does_not_replay_when_no_colour_is_available():
+    controller = ColourPickerController(FakeKritaAdapter(), scheduler=FakeScheduler())
+    observed = []
+
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
+
+    assert observed == []
+
+
 def test_visible_controller_reads_foreground_during_initial_startup():
     adapter = FakeKritaAdapter()
     external = np.array([0.4, -0.03, 0.07])
@@ -307,10 +330,11 @@ def test_external_sync_does_not_override_local_preview_before_commit():
 
     assert controller.sync_external_foreground() is False
     np.testing.assert_allclose(controller.selected_colour, preview)
-    # set_preview_colour broadcasts PREVIEW (§2.4); the blocked external sync
+    # Subscribe replays INITIAL (foreground existed at startup); then
+    # set_preview_colour broadcasts PREVIEW (§2.4). The blocked external sync
     # adds no EXTERNAL.
-    assert [kind for _colour, kind in observed] == [ChangeKind.PREVIEW]
-    np.testing.assert_allclose(observed[0][0], preview)
+    assert [kind for _colour, kind in observed] == [ChangeKind.INITIAL, ChangeKind.PREVIEW]
+    np.testing.assert_allclose(observed[-1][0], preview)
 
 
 def test_external_sync_does_not_override_preview_across_repeated_polls():
@@ -330,9 +354,9 @@ def test_external_sync_does_not_override_preview_across_repeated_polls():
     clock.advance(0.25)
     assert controller.sync_external_foreground() is False
     np.testing.assert_allclose(controller.selected_colour, preview)
-    # One PREVIEW broadcast from set_preview_colour; the repeated blocked
+    # INITIAL replay on subscribe, then one PREVIEW; the repeated blocked
     # syncs add no EXTERNAL.
-    assert [kind for _colour, kind in observed] == [ChangeKind.PREVIEW]
+    assert [kind for _colour, kind in observed] == [ChangeKind.INITIAL, ChangeKind.PREVIEW]
 
 
 def test_preview_cancellation_does_not_drop_external_sync_guard():
@@ -350,9 +374,9 @@ def test_preview_cancellation_does_not_drop_external_sync_guard():
     controller.set_preview_colour(None)
 
     assert controller.sync_external_foreground() is False
-    # PREVIEW once for the non-None preview; the None cancel does not
-    # broadcast, and the blocked sync adds no EXTERNAL.
-    assert [kind for _colour, kind in observed] == [ChangeKind.PREVIEW]
+    # INITIAL replay on subscribe, then PREVIEW for the non-None preview; the
+    # None cancel does not broadcast, and the blocked sync adds no EXTERNAL.
+    assert [kind for _colour, kind in observed] == [ChangeKind.INITIAL, ChangeKind.PREVIEW]
 
 
 def test_external_sync_resumes_after_preview_guard_expires():
@@ -385,13 +409,13 @@ def test_external_sync_does_not_override_pending_local_commit_before_flush():
 
     assert controller.sync_external_foreground() is False
     np.testing.assert_allclose(controller.selected_colour, committed)
-    # The broadcast happens at flush, not on request; nothing yet.
-    assert observed == []
+    # Only the INITIAL replay so far; the commit broadcast happens at flush.
+    assert [kind for _colour, kind in observed] == [ChangeKind.INITIAL]
 
     scheduler.run_pending()
     np.testing.assert_allclose(controller.selected_colour, committed)
     assert len(adapter.set_foreground_calls) == 1
-    assert [kind for _colour, kind in observed] == [ChangeKind.COMMIT]
+    assert [kind for _colour, kind in observed] == [ChangeKind.INITIAL, ChangeKind.COMMIT]
 
 
 def test_krita_adapter_returns_none_without_active_window():

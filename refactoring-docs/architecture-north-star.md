@@ -129,7 +129,7 @@ controller.colour_changed(colour: np.ndarray, kind: ChangeKind)
 | `request_foreground_commit` → flush success | yes | `COMMIT` | after successful adapter write; carries the normalized committed colour |
 | flush failure / rollback | yes | `ROLLBACK` | carries the restored pre-commit colour |
 | `sync_external_foreground` (Krita-originated) | yes | `EXTERNAL` | the only kind that may force a `PINNED` view to `IDLE` |
-| initial startup foreground pull | yes | `INITIAL` | replay seed for views created before/after (see §2.5) |
+| `add_colour_listener` (subscribe) | yes, to the new listener only | `INITIAL` | replay of `selected_colour`; the startup pull in `__init__` runs before any listener exists, so INITIAL is delivered at subscribe time as the seed for views created before/after (see §2.5) |
 | self-feedback / no-op (token+quantized match) | **no** | — | suppressed exactly as today (`_is_self_feedback`) |
 
 `kind` is informational for views that need it (`COMMIT` updates ReadoutPanel's

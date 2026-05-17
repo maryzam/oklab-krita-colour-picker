@@ -139,16 +139,16 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         self._last_shown = colour
         for mode, widget in self._selectors.items():
             # PR-2 model-rebuild policy (north-star §5 row 2): the dock builds
-            # the per-mode slice model from each broadcast colour, but a view
-            # mid-gesture (DRAGGING/KEYBOARD) is never disturbed — its state
-            # machine owns the interaction until release (§3.5). Slice 4 only
+            # the per-mode slice model from each broadcast colour, but the
+            # *widget* decides whether to apply it. A view mid-gesture
+            # (DRAGGING/KEYBOARD) is never disturbed — and is not even rebuilt
+            # — its state machine owns the interaction until release (§3.5).
+            # Crucially, the model is passed *into* show_colour so a swallowed
+            # PINNED echo never triggers a model reset (INV-3). Slice 4 only
             # optimizes the rebuild caching, not this policy.
             if widget.state in (DRAGGING, KEYBOARD):
                 continue
-            model = _model_for_colour(mode, colour)
-            if widget.model != model:
-                widget.set_model(model)
-            widget.show_colour(colour, kind)
+            widget.show_colour(colour, kind, model=_model_for_colour(mode, colour))
         self._readout_panel.set_current_colour(
             colour, committed=kind is not ChangeKind.PREVIEW
         )

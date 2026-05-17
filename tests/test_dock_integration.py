@@ -110,6 +110,57 @@ def test_selector_signals_update_controller_and_sibling_indicators(qtbot):
         np.testing.assert_allclose(widget.selected_colour, colour)
 
 
+def test_real_controller_normalized_commit_echo_keeps_emitter_pinned(qtbot):
+    # Regression: with the *real* controller the COMMIT broadcast carries
+    # normalize_oklab_for_krita(committed). That 8-bit round trip shifts the
+    # fixed slice coordinate enough that the rebuilt model no longer compares
+    # equal, so a pre-show_colour set_model() used to knock the emitting
+    # selector out of PINNED. The emitter must absorb its own normalized echo.
+    from oklab_colour_picker.controller import ColourPickerController, normalize_oklab_for_krita
+
+    class NormalizingAdapter:
+        def __init__(self):
+            self.foreground = None
+
+        def set_foreground(self, oklab):
+            self.foreground = normalize_oklab_for_krita(oklab)
+            return self.foreground.copy()
+
+        def get_foreground(self):
+            return None if self.foreground is None else self.foreground.copy()
+
+    class ImmediateScheduler:
+        def call_soon(self, callback):
+            callback()
+
+    controller = ColourPickerController(NormalizingAdapter(), scheduler=ImmediateScheduler())
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    panel.set_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
+    active = panel.active_selector
+    active.resize(120, 80)
+    click = QtCore.QPoint(20, 10)
+    expected = active.model.color_at_position((click.x(), click.y()), (120, 80))
+    assert expected is not None
+
+    press = QtGui.QMouseEvent(
+        QtCore.QEvent.MouseButtonPress, click, QtCore.Qt.LeftButton,
+        QtCore.Qt.LeftButton, QtCore.Qt.NoModifier,
+    )
+    release = QtGui.QMouseEvent(
+        QtCore.QEvent.MouseButtonRelease, click, QtCore.Qt.LeftButton,
+        QtCore.Qt.NoButton, QtCore.Qt.NoModifier,
+    )
+    QtCore.QCoreApplication.sendEvent(active, press)
+    QtCore.QCoreApplication.sendEvent(active, release)
+
+    assert active.state == "PINNED"
+    assert active.anchor == pytest.approx((float(click.x()), float(click.y())))
+    assert active.indicator_position() == pytest.approx(
+        (float(click.x()), float(click.y()))
+    )
+
+
 def test_click_on_achromatic_hue_lightness_slice_keeps_indicator_at_click(qtbot):
     # The dock loops set_selected_colour back to the source widget after
     # every previewed/committed signal. On a chroma=0 hue/lightness disk the

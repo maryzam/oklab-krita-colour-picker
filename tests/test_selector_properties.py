@@ -68,7 +68,7 @@ def test_p2_model_position_lookup_is_idempotent_for_same_colour(case, width, hei
     assert once == pytest.approx(twice)
 
 
-@settings(max_examples=10, derandomize=True, deadline=None)
+@settings(max_examples=200, derandomize=True, deadline=None)
 @given(
     case=st.sampled_from(MODEL_CASES),
     width=st.integers(min_value=16, max_value=96),
@@ -97,7 +97,7 @@ def test_p3_idle_indicator_is_independent_of_interaction_history(case, width, he
     assert widget.indicator_position() == pytest.approx(idle_position)
 
 
-@settings(max_examples=10, derandomize=True, deadline=None)
+@settings(max_examples=200, derandomize=True, deadline=None)
 @given(colour=st.tuples(st.floats(0.0, 1.0), st.floats(-0.1, 0.1), st.floats(-0.1, 0.1)))
 def test_p2_show_colour_echo_idempotence_from_any_state(colour):
     _ensure_qapp()
@@ -113,16 +113,61 @@ def test_p2_show_colour_echo_idempotence_from_any_state(colour):
     assert (widget.state, widget.indicator_position()) == once
 
 
-@settings(max_examples=10, derandomize=True, deadline=None)
-@given(lightness=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False))
-def test_p4_idle_state_has_no_orphan_anchor(lightness):
+@settings(max_examples=200, derandomize=True, deadline=None)
+@given(
+    case=st.sampled_from(MODEL_CASES),
+    width=st.integers(min_value=16, max_value=96),
+    height=st.integers(min_value=16, max_value=96),
+    points=st.lists(
+        st.tuples(
+            st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+            st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+        ),
+        min_size=1,
+        max_size=5,
+    ),
+)
+def test_p4_no_orphan_anchor_after_random_gesture_sequence(case, width, height, points):
     _ensure_qapp()
+    from PyQt5 import QtCore, QtGui, QtWidgets
     from oklab_colour_picker.widgets import SelectorWidget
 
-    widget = SelectorWidget(LightnessSliceModel(lightness=float(lightness)))
+    _name, model = case
+    widget = SelectorWidget(model)
+    # Stay above the 32x32 minimum so the later resize is a real size change
+    # (sub-minimum resizes are clamped and would not deliver a resizeEvent).
+    widget.resize(width + 40, height + 40)
+    widget.show()
+    QtWidgets.QApplication.processEvents()
+    actual_w, actual_h = widget.width(), widget.height()
+    qpoints = [
+        QtCore.QPoint(int(fx * (actual_w - 1)), int(fy * (actual_h - 1)))
+        for fx, fy in points
+    ]
+
+    def send(kind, point, button, buttons):
+        QtWidgets.QApplication.sendEvent(
+            widget,
+            QtGui.QMouseEvent(
+                kind, QtCore.QPointF(point), button, buttons, QtCore.Qt.NoModifier
+            ),
+        )
+
+    # Press, drag through the random points, release: a real gesture history.
+    send(QtCore.QEvent.MouseButtonPress, qpoints[0], QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    for point in qpoints[1:]:
+        send(QtCore.QEvent.MouseMove, point, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    send(QtCore.QEvent.MouseButtonRelease, qpoints[-1], QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    # End outside anchored states: a resize drops a PINNED anchor (INV-1); if
+    # the gesture already fell back to IDLE this is a harmless no-op. Either
+    # way, no anchor may survive (P4 / INV-1).
+    widget.resize(actual_w + 17, actual_h + 13)
+    QtWidgets.QApplication.processEvents()
 
     assert widget.state == "IDLE"
     assert widget.anchor is None
+    widget.close()
 
 
 def test_edge_hue_wrap_position_is_stable_across_zero_tau():

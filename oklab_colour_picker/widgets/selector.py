@@ -126,26 +126,43 @@ class SelectorWidget(QtWidgets.QWidget):
         self._clear_image_cache()
         self.update()
 
-    def show_colour(self, oklab: Sequence[float] | None, kind: object | None = None) -> None:
+    def show_colour(
+        self,
+        oklab: Sequence[float] | None,
+        kind: object | None = None,
+        *,
+        model: SelectorModel | None = None,
+    ) -> None:
         """Absorb an inbound (broadcast) colour per the state machine (§3.2/§3.5).
 
         ``kind`` is informational only; it is never used to skip a view.
         Absorption is local: only ``PINNED`` swallows an echo, and only when
         the colour quantizes-equal to the pinned colour (INV-3 / INV-4).
+
+        ``model`` is the candidate slice model the dock built from this
+        colour. It is applied **only when the colour is actually rendered** —
+        a swallowed echo or an ignored in-flight broadcast must never trigger
+        a model reset, or the emitting ``PINNED`` selector would be knocked
+        out of its anchor before it can absorb its own COMMIT echo (the 8-bit
+        Krita round trip shifts the fixed slice coordinate just enough that
+        the rebuilt model no longer compares equal).
         """
 
         if self._state in _IN_FLIGHT_STATES:
-            # An in-flight local gesture wins; the inbound colour is ignored.
+            # An in-flight local gesture wins; the inbound colour is ignored
+            # and the candidate model is discarded (the gesture owns it).
             return
 
         new_colour = _as_oklab(oklab)
 
         if self._state == PINNED:
             if new_colour is not None and self._quantized_equal(new_colour, self._selected_colour):
-                return  # the echo — swallow it, stay PINNED (INV-3)
+                return  # the echo — swallow it, stay PINNED (INV-3); no model swap
             # A genuinely different colour supersedes the pin.
             self._set_state(IDLE, anchor=None)
 
+        if model is not None and model != self._model:
+            self.set_model(model)
         self._selected_colour = new_colour
         self.update()
 

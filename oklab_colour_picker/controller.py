@@ -111,6 +111,16 @@ class ColourPickerController:
 
     def add_colour_listener(self, listener: ColourListener) -> None:
         self._colour_listeners.append(listener)
+        # Replay the current colour as the INITIAL seed so views created
+        # before *or* after the startup foreground pull converge on the same
+        # state (north-star §2.4). The pull in __init__ happens before any
+        # listener exists, so this subscribe-time replay is how INITIAL is
+        # delivered.
+        if self._selected_colour is not None:
+            try:
+                listener(self._selected_colour.copy(), ChangeKind.INITIAL)
+            except Exception:
+                LOGGER.exception("colour listener failed")
 
     def remove_colour_listener(self, listener: ColourListener) -> None:
         try:
