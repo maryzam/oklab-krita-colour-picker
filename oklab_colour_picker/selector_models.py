@@ -19,4 +19,5 @@ __all__ = [
     "Position",
     "SelectorModel",
     "Size",
+    "_position_from_circle",
 ]
