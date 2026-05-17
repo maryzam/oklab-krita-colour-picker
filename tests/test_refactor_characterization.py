@@ -253,6 +253,8 @@ def test_secondary_resize_after_commit_drops_absolute_pixel_override(qtbot):
     _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, point, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
     widget.resize(160, 90)
 
+    # Characterizes the desired visible behavior, not the legacy resizeEvent
+    # override: PR-2 should keep this green after replacing that implementation.
     expected = widget.model.position_for_color(colour, (160, 90))
     assert expected is not None
     assert widget.indicator_position() == pytest.approx(expected, abs=1.0)
@@ -385,6 +387,8 @@ def _keyboard_start_point(widget, size):
         event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
         QtWidgets.QApplication.sendEvent(widget, event)
         if event.isAccepted():
+            # PR-2-fragile: this only cleans up the legacy pending-commit flag
+            # after probing for a keyboard-nudgeable point.
             widget._keyboard_commit_pending = False
             widget.set_selected_colour(colour)
             return point

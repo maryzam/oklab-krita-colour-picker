@@ -224,10 +224,7 @@ def project_import_references(node: ast.ImportFrom, source_path: Path) -> list[s
 
 def _relative_import_base(source_path: Path, level: int) -> tuple[str, ...]:
     module_parts = source_path.with_suffix("").parts
-    if module_parts[-1] == "__init__":
-        package_parts = module_parts[:-1]
-    else:
-        package_parts = module_parts[:-1]
+    package_parts = module_parts[:-1]
     keep = max(0, len(package_parts) - level + 1)
     return package_parts[:keep]
 
