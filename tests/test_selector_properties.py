@@ -68,7 +68,6 @@ def test_p2_model_position_lookup_is_idempotent_for_same_colour(case, width, hei
     assert once == pytest.approx(twice)
 
 
-@pytest.mark.xfail(strict=True, reason="PR-2 / P3: explicit IDLE state-machine API does not exist yet")
 @settings(max_examples=10, derandomize=True, deadline=None)
 @given(
     case=st.sampled_from(MODEL_CASES),
@@ -98,7 +97,6 @@ def test_p3_idle_indicator_is_independent_of_interaction_history(case, width, he
     assert widget.indicator_position() == pytest.approx(idle_position)
 
 
-@pytest.mark.xfail(strict=True, reason="PR-2 / P2: SelectorWidget.show_colour state-machine API does not exist yet")
 @settings(max_examples=10, derandomize=True, deadline=None)
 @given(colour=st.tuples(st.floats(0.0, 1.0), st.floats(-0.1, 0.1), st.floats(-0.1, 0.1)))
 def test_p2_show_colour_echo_idempotence_from_any_state(colour):
@@ -115,7 +113,6 @@ def test_p2_show_colour_echo_idempotence_from_any_state(colour):
     assert (widget.state, widget.indicator_position()) == once
 
 
-@pytest.mark.xfail(strict=True, reason="PR-2 / P4: explicit anchor/state API does not exist yet")
 @settings(max_examples=10, derandomize=True, deadline=None)
 @given(lightness=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False))
 def test_p4_idle_state_has_no_orphan_anchor(lightness):

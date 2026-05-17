@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from enum import Enum
 from typing import Callable, Protocol, Sequence
 
 import numpy as np
@@ -11,7 +12,23 @@ import numpy as np
 from oklab_colour_picker import color_math
 
 
-ForegroundListener = Callable[[np.ndarray], None]
+class ChangeKind(Enum):
+    """Why the controller's colour state changed (north-star §2.4).
+
+    ``kind`` is informational for views that need it; it is **not** a source
+    tag and must never be used to skip a view. Echo absorption stays local in
+    each view's state machine (INV-3).
+    """
+
+    PREVIEW = "preview"
+    COMMIT = "commit"
+    ROLLBACK = "rollback"
+    EXTERNAL = "external"
+    INITIAL = "initial"
+
+
+# Listeners receive the broadcast colour and the reason it changed.
+ColourListener = Callable[[np.ndarray, ChangeKind], None]
 LOGGER = logging.getLogger(__name__)
 LOCAL_INTERACTION_SYNC_GRACE_SECONDS = 0.75
 
@@ -61,7 +78,7 @@ class ColourPickerController:
         self._scheduler = scheduler if scheduler is not None else ImmediateScheduler()
         self._foreground_timer = foreground_timer
         self._foreground_poll_interval_ms = foreground_poll_interval_ms
-        self._foreground_listeners: list[ForegroundListener] = []
+        self._colour_listeners: list[ColourListener] = []
         self._selected_colour: np.ndarray | None = None
         self._pending_commit: np.ndarray | None = None
         self._selection_before_pending_commit: np.ndarray | None = None
@@ -92,21 +109,42 @@ class ColourPickerController:
     def last_committed_colour(self) -> np.ndarray | None:
         return None if self._last_committed_colour is None else self._last_committed_colour.copy()
 
-    def add_foreground_listener(self, listener: ForegroundListener) -> None:
-        self._foreground_listeners.append(listener)
+    def add_colour_listener(self, listener: ColourListener) -> None:
+        self._colour_listeners.append(listener)
 
-    def remove_foreground_listener(self, listener: ForegroundListener) -> None:
+    def remove_colour_listener(self, listener: ColourListener) -> None:
         try:
-            self._foreground_listeners.remove(listener)
+            self._colour_listeners.remove(listener)
         except ValueError:
             pass
 
+    def _broadcast(self, colour: np.ndarray, kind: ChangeKind) -> None:
+        """Notify every listener uniformly (no skip-the-originator logic).
+
+        Each view's state machine decides whether to honour or absorb the
+        inbound colour; this is what keeps the data flow genuinely one-way
+        (north-star §2.1 / §2.4, INV-3).
+        """
+
+        for listener in list(self._colour_listeners):
+            try:
+                listener(colour.copy(), kind)
+            except Exception:
+                LOGGER.exception("colour listener failed")
+
     def set_preview_colour(self, oklab: Sequence[float] | None) -> None:
-        """Set transient UI preview state without replacing any pending commit."""
+        """Set transient UI preview state without replacing any pending commit.
+
+        Broadcasts ``PREVIEW`` so *other* views can track a mid-drag preview;
+        the emitting view self-absorbs the echo via its own state machine
+        (north-star §2.4).
+        """
 
         self._selected_colour = None if oklab is None else _as_oklab(oklab)
-        if oklab is not None:
-            self._extend_local_interaction_guard()
+        if oklab is None:
+            return
+        self._extend_local_interaction_guard()
+        self._broadcast(self._selected_colour, ChangeKind.PREVIEW)
 
     def request_foreground_commit(self, oklab: Sequence[float] | None) -> None:
         if oklab is None:
@@ -147,11 +185,7 @@ class ColourPickerController:
             self._selection_before_pending_commit = colour.copy()
         self._last_committed_token = None
         self._last_committed_colour = None
-        for listener in self._foreground_listeners:
-            try:
-                listener(colour.copy())
-            except Exception:
-                LOGGER.exception("foreground listener failed")
+        self._broadcast(colour, ChangeKind.EXTERNAL)
         return True
 
     def set_dock_visible(self, visible: bool) -> None:
@@ -181,18 +215,25 @@ class ColourPickerController:
 
         normalized = normalize_oklab_for_krita(colour)
         if self._last_committed_colour is not None and _quantized_equal(normalized, self._last_committed_colour):
+            # No adapter write needed (quantizes to the live foreground), but
+            # still broadcast COMMIT so views converge on the committed value.
             self._selected_colour = colour
+            self._broadcast(self._last_committed_colour, ChangeKind.COMMIT)
             return
 
         committed = self._adapter.set_foreground(colour)
         if committed is None:
-            self._selected_colour = None if selection_before_commit is None else selection_before_commit.copy()
+            restored = None if selection_before_commit is None else selection_before_commit.copy()
+            self._selected_colour = restored
+            if restored is not None:
+                self._broadcast(restored, ChangeKind.ROLLBACK)
             return
 
         self._commit_token += 1
         self._last_committed_token = self._commit_token
         self._last_committed_colour = normalize_oklab_for_krita(committed)
         self._selected_colour = colour
+        self._broadcast(self._last_committed_colour, ChangeKind.COMMIT)
 
     def _is_self_feedback(self, normalized_colour: np.ndarray) -> bool:
         return (

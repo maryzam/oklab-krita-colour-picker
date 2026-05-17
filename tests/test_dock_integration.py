@@ -11,6 +11,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 import oklab_colour_picker
 from oklab_colour_picker import color_math
+from oklab_colour_picker.controller import ChangeKind
 from oklab_colour_picker.dock import ColourPickerDockPanel, SelectorMode, connect_dock_visibility
 from oklab_colour_picker.plugin import DOCK_FACTORY_ID, DOCK_TITLE, create_dock_widget_class, register_plugin
 from oklab_colour_picker.widgets import HueLightnessSliceDiskWidget
@@ -489,9 +490,13 @@ class FakeController:
 
     def set_preview_colour(self, colour):
         self.previews.append(None if colour is None else np.asarray(colour, dtype=float).copy())
+        if colour is not None:
+            self._broadcast(colour, ChangeKind.PREVIEW)
 
     def request_foreground_commit(self, colour):
         self.commits.append(None if colour is None else np.asarray(colour, dtype=float).copy())
+        if colour is not None:
+            self._broadcast(colour, ChangeKind.COMMIT)
 
     def set_dock_visible(self, visible):
         self.visibility.append(bool(visible))
@@ -500,15 +505,19 @@ class FakeController:
         self.sync_count += 1
         return False
 
-    def add_foreground_listener(self, listener):
+    def add_colour_listener(self, listener):
         self._foreground_listeners.append(listener)
 
-    def remove_foreground_listener(self, listener):
+    def remove_colour_listener(self, listener):
         self._foreground_listeners.remove(listener)
 
-    def emit_foreground(self, colour):
+    def _broadcast(self, colour, kind):
+        self._selected_colour = np.asarray(colour, dtype=float).copy()
         for listener in list(self._foreground_listeners):
-            listener(np.asarray(colour, dtype=float).copy())
+            listener(self._selected_colour.copy(), kind)
+
+    def emit_foreground(self, colour):
+        self._broadcast(colour, ChangeKind.EXTERNAL)
 
 
 class FakeKritaApp:

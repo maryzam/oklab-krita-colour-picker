@@ -1,4 +1,22 @@
-"""Qt selector widget backed by pure selector models and NumPy renderers."""
+"""Qt selector widget backed by pure selector models and NumPy renderers.
+
+The widget is an **explicit** finite state machine (north-star §3). Every
+interaction transition is named and tested instead of emerging from a tangle
+of booleans. The states are:
+
+- ``IDLE``     — rendering an externally pushed colour; no anchor. The
+  indicator is a pure function of ``(colour, model, size)``.
+- ``DRAGGING`` — pointer held; emitting ``previewed``. Anchor = cursor pixel.
+- ``KEYBOARD`` — arrow/page navigation in flight; commit pending.
+  Anchor = target pixel.
+- ``PINNED``   — post-commit; holds the committed colour at the anchor pixel
+  until something external supersedes it.
+
+Inbound colours (``show_colour``) are arbitrated **locally** by the state
+machine (INV-3): only ``PINNED`` swallows an echo, and only when it
+quantizes-equal to the pinned colour (INV-4). The dock/controller never
+special-case the source.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +26,27 @@ import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import renderers
+from oklab_colour_picker.controller import normalize_oklab_for_krita
 from oklab_colour_picker.selector_models import IndicatorSpec, SelectorModel
 
 
-class SelectorWidget(QtWidgets.QWidget):
-    """Paint and interact with a selector model.
+IDLE = "IDLE"
+DRAGGING = "DRAGGING"
+KEYBOARD = "KEYBOARD"
+PINNED = "PINNED"
 
-    The widget owns only presentation state. Picking and indicator placement
-    are delegated to the selector model, and RGBA pixels come from the renderer.
+# States that own an anchor pixel and win over inbound broadcasts.
+_ANCHORED_STATES = (DRAGGING, KEYBOARD, PINNED)
+# States representing a local gesture in flight; inbound colours are ignored.
+_IN_FLIGHT_STATES = (DRAGGING, KEYBOARD)
+
+
+class SelectorWidget(QtWidgets.QWidget):
+    """Paint and interact with a selector model via an explicit state machine.
+
+    The widget owns only presentation/interaction state. Picking and indicator
+    placement are delegated to the selector model; RGBA pixels come from the
+    renderer. It never holds authoritative colour state (INV-5).
     """
 
     previewed = QtCore.pyqtSignal(object)
@@ -25,17 +56,56 @@ class SelectorWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._model = model
         self._selected_colour: np.ndarray | None = None
-        self._colour_before_drag: np.ndarray | None = None
-        self._last_valid_drag_colour: np.ndarray | None = None
-        self._last_interaction_position: tuple[float, float] | None = None
+        self._state: str = IDLE
+        self._anchor: tuple[float, float] | None = None
+        self._colour_before: np.ndarray | None = None
+        self._last_valid: np.ndarray | None = None
+        self._transition_log: list[str] = [IDLE]
         self._image_cache_key: tuple[SelectorModel, int, int] | None = None
         self._image_cache_buffer: np.ndarray | None = None
         self._image_cache: QtGui.QImage | None = None
-        self._pressed = False
-        self._keyboard_commit_pending = False
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
         self.setMinimumSize(32, 32)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+    # -- State machine surface ----------------------------------------
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def anchor(self) -> tuple[float, float] | None:
+        return self._anchor
+
+    @property
+    def transition_log(self) -> tuple[str, ...]:
+        """Ordered log of states entered (for no-flicker assertions, §4.1)."""
+
+        return tuple(self._transition_log)
+
+    def enter_state(self, name: str, *, anchor: tuple[float, float] | None = None) -> None:
+        """Force a state transition. Test/orchestration hook for §3.2.
+
+        Colour state is never mutated here — only interaction state. ``IDLE``
+        drops the anchor (INV-1); the other states adopt ``anchor``.
+        """
+
+        if name not in (IDLE, DRAGGING, KEYBOARD, PINNED):
+            raise ValueError(f"unknown selector state: {name!r}")
+        self._set_state(name, anchor=None if name == IDLE else anchor)
+        self.update()
+
+    def _set_state(self, name: str, *, anchor: tuple[float, float] | None) -> None:
+        self._anchor = None if name == IDLE else anchor
+        if name != self._state:
+            self._state = name
+            self._transition_log.append(name)
+        elif anchor is not None:
+            # Same state, moved anchor (e.g. DRAGGING follows the cursor).
+            self._anchor = anchor
+
+    # -- Colour surface ------------------------------------------------
 
     @property
     def model(self) -> SelectorModel:
@@ -49,30 +119,49 @@ class SelectorWidget(QtWidgets.QWidget):
         if self._model is model:
             return
         self._model = model
-        self._last_interaction_position = None
+        # Model change is an external reset: no anchor survives it (INV-1).
+        self._set_state(IDLE, anchor=None)
+        self._colour_before = None
+        self._last_valid = None
         self._clear_image_cache()
         self.update()
 
-    def set_selected_colour(self, oklab: Sequence[float] | None) -> None:
+    def show_colour(self, oklab: Sequence[float] | None, kind: object | None = None) -> None:
+        """Absorb an inbound (broadcast) colour per the state machine (§3.2/§3.5).
+
+        ``kind`` is informational only; it is never used to skip a view.
+        Absorption is local: only ``PINNED`` swallows an echo, and only when
+        the colour quantizes-equal to the pinned colour (INV-3 / INV-4).
+        """
+
+        if self._state in _IN_FLIGHT_STATES:
+            # An in-flight local gesture wins; the inbound colour is ignored.
+            return
+
         new_colour = _as_oklab(oklab)
-        # The dock loops set_selected_colour back to the source widget on
-        # every previewed/committed signal, so we must keep the recorded
-        # interaction position whenever it still resolves to the new colour
-        # under the current model. Otherwise on achromatic slices the
-        # override is cleared between click and repaint and the indicator
-        # falls back to the model's hue=0 round-trip.
-        if not self._interaction_position_resolves_to(new_colour):
-            self._last_interaction_position = None
+
+        if self._state == PINNED:
+            if new_colour is not None and self._quantized_equal(new_colour, self._selected_colour):
+                return  # the echo — swallow it, stay PINNED (INV-3)
+            # A genuinely different colour supersedes the pin.
+            self._set_state(IDLE, anchor=None)
+
         self._selected_colour = new_colour
         self.update()
+
+    # Backwards-compatible alias used by programmatic/seed callers.
+    set_selected_colour = show_colour
 
     def indicator_position(self) -> tuple[float, float] | None:
         if self._selected_colour is None:
             return None
-        override = self._interaction_indicator_position()
-        if override is not None:
-            return override
+        if self._anchor is not None:
+            # Anchored states draw at the anchor regardless of the model's
+            # colour→position round-trip (INV-2).
+            return self._anchor
         return self._model.position_for_color(self._selected_colour, _widget_size(self))
+
+    # -- Painting ------------------------------------------------------
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
@@ -88,60 +177,95 @@ class SelectorWidget(QtWidgets.QWidget):
         self._paint_indicator(painter)
         painter.end()
 
+    def _paint_indicator(self, painter: QtGui.QPainter) -> None:
+        if self._selected_colour is None:
+            return
+
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        painter.setBrush(QtCore.Qt.NoBrush)
+
+        if self._anchor is not None:
+            self._stroke_circle(painter, self._anchor, solid=True)
+            return
+
+        indicator = self._model.indicator_for_color(self._selected_colour, _widget_size(self))
+        if indicator is None:
+            return
+        if indicator.snapped is not None and indicator.out_of_gamut:
+            # Out of gamut on this slice: solid ring where the colour wants to
+            # be, dashed ring at the snapped position the user paints with.
+            self._stroke_circle(painter, indicator.desired, solid=True)
+            self._stroke_circle(painter, indicator.snapped, solid=False)
+            return
+        self._stroke_circle(painter, indicator.desired, solid=True)
+
+    # -- Mouse interaction --------------------------------------------
+
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
         if event.button() != QtCore.Qt.LeftButton:
             event.ignore()
             return
         self.setFocus(QtCore.Qt.MouseFocusReason)
-        self._keyboard_commit_pending = False
-        self._pressed = True
-        self._colour_before_drag = None if self._selected_colour is None else self._selected_colour.copy()
-        self._last_valid_drag_colour = None
+        # Any non-IDLE state → DRAGGING; this cancels a pending keyboard
+        # commit *without* flushing it (last row of §3.2).
+        self._colour_before = None if self._selected_colour is None else self._selected_colour.copy()
+        self._last_valid = None
+        self._set_state(DRAGGING, anchor=(float(event.pos().x()), float(event.pos().y())))
         self._preview_at(event.pos())
         event.accept()
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if not self._pressed:
+        if self._state != DRAGGING:
             event.ignore()
             return
         self._preview_at(event.pos())
         event.accept()
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() != QtCore.Qt.LeftButton or not self._pressed:
+        if event.button() != QtCore.Qt.LeftButton or self._state != DRAGGING:
             event.ignore()
             return
-        colour = self._drag_colour_at(event.pos())
-        self._pressed = False
+        point = event.pos()
+        colour = self._drag_colour_at(point)
         if colour is not None:
             self._selected_colour = colour.copy()
-            self._record_interaction_position(event.pos(), colour)
+            self._set_state(PINNED, anchor=(float(point.x()), float(point.y())))
             self.update()
             self.committed.emit(colour.copy())
-        elif self._last_valid_drag_colour is not None:
-            self._selected_colour = self._last_valid_drag_colour.copy()
+        elif self._last_valid is not None:
+            self._selected_colour = self._last_valid.copy()
+            self._set_state(PINNED, anchor=self._anchor)
             self.update()
-            self.committed.emit(self._last_valid_drag_colour.copy())
+            self.committed.emit(self._last_valid.copy())
         else:
-            self._selected_colour = self._colour_before_drag
-            self._last_interaction_position = None
+            restored = self._colour_before
+            self._selected_colour = restored
+            self._set_state(IDLE, anchor=None)
             self.update()
-            self.previewed.emit(None if self._selected_colour is None else self._selected_colour.copy())
-        self._colour_before_drag = None
-        self._last_valid_drag_colour = None
+            self.previewed.emit(None if restored is None else restored.copy())
+        self._colour_before = None
+        self._last_valid = None
         event.accept()
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        # The interaction override is stored in absolute widget pixels, so it
-        # is meaningless under a new size — drop it and let the model decide.
-        self._last_interaction_position = None
+        # The anchor is stored in absolute widget pixels, so it is meaningless
+        # under a new size. A resize while PINNED is a model/size change: drop
+        # the anchor and let the model place the indicator (§3.2, INV-1).
+        if self._state == PINNED:
+            self._set_state(IDLE, anchor=None)
         super().resizeEvent(event)
 
     def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:
         self._flush_keyboard_commit()
         super().focusOutEvent(event)
 
+    # -- Keyboard interaction -----------------------------------------
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if self._state == DRAGGING:
+            event.ignore()
+            return
+
         position = self.indicator_position()
         if position is None:
             position = ((self.width() - 1.0) / 2.0, (self.height() - 1.0) / 2.0)
@@ -157,8 +281,7 @@ class SelectorWidget(QtWidgets.QWidget):
             return
 
         self._selected_colour = colour.copy()
-        self._record_interaction_position(point, colour)
-        self._keyboard_commit_pending = True
+        self._set_state(KEYBOARD, anchor=(float(point.x()), float(point.y())))
         self.update()
         self.previewed.emit(colour.copy())
         event.accept()
@@ -167,31 +290,40 @@ class SelectorWidget(QtWidgets.QWidget):
         if event.isAutoRepeat():
             event.accept()
             return
-        if not self._is_keyboard_navigation_key(event.key()) or not self._keyboard_commit_pending:
+        if not self._is_keyboard_navigation_key(event.key()) or self._state != KEYBOARD:
             event.ignore()
             return
 
         self._flush_keyboard_commit()
         event.accept()
 
+    def _flush_keyboard_commit(self) -> None:
+        if self._state != KEYBOARD:
+            return
+        colour = self._selected_colour
+        self._set_state(PINNED, anchor=self._anchor)
+        if colour is not None:
+            self.committed.emit(colour.copy())
+
+    # -- Picking helpers ----------------------------------------------
+
     def _preview_at(self, point: QtCore.QPoint) -> None:
-        colour = self._drag_colour_at(point) if self._pressed else self._colour_at(point)
+        colour = self._drag_colour_at(point)
         if colour is not None:
             self._selected_colour = colour.copy()
-            self._record_interaction_position(point, colour)
-            if self._pressed:
-                self._last_valid_drag_colour = self._selected_colour.copy()
+            self._last_valid = self._selected_colour.copy()
+            self._set_state(DRAGGING, anchor=(float(point.x()), float(point.y())))
             self.update()
             self.previewed.emit(colour.copy())
             return
 
-        # If a drag began on an invalid point and has not yet reached any
-        # selectable colour, keep cancellation semantics until it does.
-        if self._pressed and self._last_valid_drag_colour is not None:
+        # A drag that began on (or moved onto) an invalid point and has not yet
+        # reached any selectable colour keeps cancellation semantics until it
+        # does (INV-6 fallback only applies once last_valid exists).
+        if self._last_valid is not None:
             return
 
         self._selected_colour = None
-        self._last_interaction_position = None
         self.update()
         self.previewed.emit(None)
 
@@ -202,11 +334,8 @@ class SelectorWidget(QtWidgets.QWidget):
         colour = self._colour_at(point)
         if colour is not None:
             return colour
-        if self._last_valid_drag_colour is None:
+        if self._last_valid is None:
             return None
-        return self._snapped_colour_at(point)
-
-    def _snapped_colour_at(self, point: QtCore.QPoint) -> np.ndarray | None:
         return self._model.snapped_color_at_position((point.x(), point.y()), _widget_size(self))
 
     def _keyboard_target_position(
@@ -260,66 +389,20 @@ class SelectorWidget(QtWidgets.QWidget):
             QtCore.Qt.Key_PageDown,
         }
 
-    def _flush_keyboard_commit(self) -> None:
-        if not self._keyboard_commit_pending:
-            return
-        self._keyboard_commit_pending = False
-        if self._selected_colour is not None:
-            self.committed.emit(self._selected_colour.copy())
-
-    def _paint_indicator(self, painter: QtGui.QPainter) -> None:
-        override = self._interaction_indicator_position()
-        if override is not None:
-            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-            painter.setBrush(QtCore.Qt.NoBrush)
-            self._stroke_circle(painter, override, solid=True)
-            return
-
-        indicator = self._indicator_spec()
-        if indicator is None:
-            return
-
-        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-        painter.setBrush(QtCore.Qt.NoBrush)
-
-        if indicator.snapped is not None and indicator.out_of_gamut:
-            # Out of gamut on this slice: solid ring at the desired position
-            # (where the stored colour wants to be), dashed ring at the
-            # snapped fallback position the user will actually paint with.
-            self._stroke_circle(painter, indicator.desired, solid=True)
-            self._stroke_circle(painter, indicator.snapped, solid=False)
-            return
-
-        self._stroke_circle(painter, indicator.desired, solid=True)
-
-    def _record_interaction_position(self, point: QtCore.QPoint, colour: np.ndarray) -> None:
-        # Only trust the click point as the indicator location when the model
-        # picks the same colour directly from that point. Drag snaps past the
-        # gamut leaf return colours that don't live at the cursor — there we
-        # let the model decide where to draw the indicator.
-        direct = self._colour_at(point)
-        if direct is not None and np.array_equal(direct, colour):
-            self._last_interaction_position = (float(point.x()), float(point.y()))
-        else:
-            self._last_interaction_position = None
-
-    def _interaction_position_resolves_to(self, colour: np.ndarray | None) -> bool:
-        if self._last_interaction_position is None or colour is None:
+    @staticmethod
+    def _quantized_equal(left: np.ndarray, right: np.ndarray | None) -> bool:
+        # INV-4: compare under the model/controller Krita quantization, never
+        # raw float ==, or PINNED↔IDLE flickers on near-equal echoes.
+        if right is None:
             return False
-        x, y = self._last_interaction_position
-        direct = self._model.color_at_position((x, y), _widget_size(self))
-        return direct is not None and np.array_equal(direct, colour)
+        return bool(
+            np.array_equal(
+                normalize_oklab_for_krita(left),
+                normalize_oklab_for_krita(right),
+            )
+        )
 
-    def _interaction_indicator_position(self) -> tuple[float, float] | None:
-        # The recorded position is invalidated whenever the colour changes
-        # outside of direct user interaction (see set_selected_colour /
-        # set_model), so it is safe to use without re-verifying here.
-        return self._last_interaction_position
-
-    def _indicator_spec(self) -> IndicatorSpec | None:
-        if self._selected_colour is None:
-            return None
-        return self._model.indicator_for_color(self._selected_colour, _widget_size(self))
+    # -- Rendering helpers --------------------------------------------
 
     def _stroke_circle(
         self, painter: QtGui.QPainter, position: tuple[float, float], *, solid: bool

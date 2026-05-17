@@ -1,7 +1,7 @@
 import numpy as np
 
 from oklab_colour_picker import color_math
-from oklab_colour_picker.controller import ColourPickerController, normalize_oklab_for_krita
+from oklab_colour_picker.controller import ChangeKind, ColourPickerController, normalize_oklab_for_krita
 from oklab_colour_picker.krita_adapter import KritaForegroundAdapter
 
 
@@ -90,7 +90,7 @@ def test_external_foreground_sync_updates_selected_colour_once():
     controller = ColourPickerController(adapter, scheduler=FakeScheduler())
     external = np.array([0.4, -0.03, 0.07])
     observed = []
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
 
     adapter.foreground_colour = external
     assert controller.sync_external_foreground() is True
@@ -98,7 +98,8 @@ def test_external_foreground_sync_updates_selected_colour_once():
 
     np.testing.assert_allclose(controller.selected_colour, external)
     assert len(observed) == 1
-    np.testing.assert_allclose(observed[0], external)
+    np.testing.assert_allclose(observed[0][0], external)
+    assert observed[0][1] is ChangeKind.EXTERNAL
 
 
 def test_visible_controller_reads_foreground_during_initial_startup():
@@ -150,14 +151,15 @@ def test_commit_echo_is_suppressed_by_token_and_normalized_colour_match():
     controller = ColourPickerController(adapter, scheduler=scheduler)
     committed = np.array([0.65, 0.04, -0.02])
     observed = []
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
 
     controller.request_foreground_commit(committed)
     scheduler.run_pending()
     adapter.foreground_colour = normalize_oklab_for_krita(committed)
 
     assert controller.sync_external_foreground() is False
-    assert observed == []
+    # The commit broadcasts COMMIT; the self-feedback sync adds no EXTERNAL.
+    assert [kind for _colour, kind in observed] == [ChangeKind.COMMIT]
     np.testing.assert_allclose(controller.selected_colour, committed)
 
 
@@ -168,7 +170,7 @@ def test_external_change_clears_stale_self_feedback_suppression():
     committed = np.array([0.65, 0.04, -0.02])
     external = np.array([0.38, -0.02, 0.06])
     observed = []
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
 
     controller.request_foreground_commit(committed)
     scheduler.run_pending()
@@ -177,8 +179,12 @@ def test_external_change_clears_stale_self_feedback_suppression():
     adapter.foreground_colour = normalize_oklab_for_krita(committed)
 
     assert controller.sync_external_foreground() is True
-    assert len(observed) == 2
-    np.testing.assert_allclose(observed[-1], normalize_oklab_for_krita(committed))
+    assert [kind for _colour, kind in observed] == [
+        ChangeKind.COMMIT,
+        ChangeKind.EXTERNAL,
+        ChangeKind.EXTERNAL,
+    ]
+    np.testing.assert_allclose(observed[-1][0], normalize_oklab_for_krita(committed))
 
 
 def test_external_sync_does_not_refresh_failed_commit_snapshot_during_pending_interaction():
@@ -245,8 +251,9 @@ def test_removed_foreground_listener_does_not_receive_updates():
     adapter = FakeKritaAdapter()
     controller = ColourPickerController(adapter, scheduler=FakeScheduler())
     observed = []
-    controller.add_foreground_listener(observed.append)
-    controller.remove_foreground_listener(observed.append)
+    listener = lambda colour, kind: observed.append((colour, kind))
+    controller.add_colour_listener(listener)
+    controller.remove_colour_listener(listener)
 
     adapter.foreground_colour = np.array([0.48, 0.02, 0.01])
     assert controller.sync_external_foreground() is True
@@ -259,11 +266,11 @@ def test_raising_foreground_listener_does_not_block_later_listeners():
     controller = ColourPickerController(adapter, scheduler=FakeScheduler())
     observed = []
 
-    def raising_listener(_colour):
+    def raising_listener(_colour, _kind):
         raise RuntimeError("deleted widget")
 
-    controller.add_foreground_listener(raising_listener)
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(raising_listener)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
     adapter.foreground_colour = np.array([0.48, 0.02, 0.01])
 
     assert controller.sync_external_foreground() is True
@@ -294,13 +301,16 @@ def test_external_sync_does_not_override_local_preview_before_commit():
     adapter.foreground_colour = previous
     controller = ColourPickerController(adapter, scheduler=scheduler, clock=clock)
     observed = []
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
 
     controller.set_preview_colour(preview)
 
     assert controller.sync_external_foreground() is False
     np.testing.assert_allclose(controller.selected_colour, preview)
-    assert observed == []
+    # set_preview_colour broadcasts PREVIEW (§2.4); the blocked external sync
+    # adds no EXTERNAL.
+    assert [kind for _colour, kind in observed] == [ChangeKind.PREVIEW]
+    np.testing.assert_allclose(observed[0][0], preview)
 
 
 def test_external_sync_does_not_override_preview_across_repeated_polls():
@@ -312,7 +322,7 @@ def test_external_sync_does_not_override_preview_across_repeated_polls():
     adapter.foreground_colour = previous
     controller = ColourPickerController(adapter, scheduler=scheduler, clock=clock)
     observed = []
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
 
     controller.set_preview_colour(preview)
 
@@ -320,7 +330,9 @@ def test_external_sync_does_not_override_preview_across_repeated_polls():
     clock.advance(0.25)
     assert controller.sync_external_foreground() is False
     np.testing.assert_allclose(controller.selected_colour, preview)
-    assert observed == []
+    # One PREVIEW broadcast from set_preview_colour; the repeated blocked
+    # syncs add no EXTERNAL.
+    assert [kind for _colour, kind in observed] == [ChangeKind.PREVIEW]
 
 
 def test_preview_cancellation_does_not_drop_external_sync_guard():
@@ -332,13 +344,15 @@ def test_preview_cancellation_does_not_drop_external_sync_guard():
     adapter.foreground_colour = previous
     controller = ColourPickerController(adapter, scheduler=scheduler, clock=clock)
     observed = []
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
 
     controller.set_preview_colour(preview)
     controller.set_preview_colour(None)
 
     assert controller.sync_external_foreground() is False
-    assert observed == []
+    # PREVIEW once for the non-None preview; the None cancel does not
+    # broadcast, and the blocked sync adds no EXTERNAL.
+    assert [kind for _colour, kind in observed] == [ChangeKind.PREVIEW]
 
 
 def test_external_sync_resumes_after_preview_guard_expires():
@@ -365,17 +379,19 @@ def test_external_sync_does_not_override_pending_local_commit_before_flush():
     adapter.foreground_colour = previous
     controller = ColourPickerController(adapter, scheduler=scheduler)
     observed = []
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
 
     controller.request_foreground_commit(committed)
 
     assert controller.sync_external_foreground() is False
     np.testing.assert_allclose(controller.selected_colour, committed)
+    # The broadcast happens at flush, not on request; nothing yet.
     assert observed == []
 
     scheduler.run_pending()
     np.testing.assert_allclose(controller.selected_colour, committed)
     assert len(adapter.set_foreground_calls) == 1
+    assert [kind for _colour, kind in observed] == [ChangeKind.COMMIT]
 
 
 def test_krita_adapter_returns_none_without_active_window():

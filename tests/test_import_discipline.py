@@ -194,6 +194,45 @@ def test_selector_widget_uses_explicit_model_contract():
     assert probes == []
 
 
+def test_selector_widget_keeps_no_absolute_pixel_indicator_memory():
+    """Anti-goal §7 / INV-1 tripwire: the deleted ``_last_interaction_position``
+    family must never come back; an anchor lives only inside an interaction
+    state, not as persistent absolute-pixel memory."""
+
+    source = (ROOT / "oklab_colour_picker" / "widgets" / "selector.py").read_text()
+    for forbidden in (
+        "_last_interaction_position",
+        "_record_interaction_position",
+        "_interaction_position_resolves_to",
+        "_interaction_indicator_position",
+    ):
+        assert forbidden not in source, forbidden
+
+
+def test_dock_does_not_echo_colour_back_into_views_on_intent():
+    """Anti-goal §7 / INV-3: the dock forwards intent to the controller only;
+    it must not push the colour straight back into the views (the echo loop)."""
+
+    path = ROOT / "oklab_colour_picker" / "dock.py"
+    tree = ast.parse(path.read_text(), filename=path.relative_to(ROOT).as_posix())
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in (
+            "_preview_colour",
+            "_commit_colour",
+        ):
+            continue
+        for call in ast.walk(node):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr in ("set_selected_colour", "_show_on_views", "show_colour")
+            ):
+                offenders.append(f"{node.name}: {call.func.attr}")
+
+    assert offenders == []
+
+
 def _project_python_asts():
     for full_path in sorted((ROOT / "oklab_colour_picker").rglob("*.py")):
         path = full_path.relative_to(ROOT)
