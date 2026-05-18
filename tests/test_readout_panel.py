@@ -436,9 +436,14 @@ def test_readout_panel_spinbox_typing_latches_external_without_clobbering_text(q
     assert spin.lineEdit().text() == "0.750"
     np.testing.assert_allclose(panel._current_oklab, original, atol=1e-12)
 
+    received: list[np.ndarray] = []
+    panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
+
+    spin.editingFinished.emit()
     spin.editingFinished.emit()
 
     assert panel.readout_state == "IDLE"
+    assert len(received) == 1
     committed_lightness, _, _ = color_math.oklab_to_oklch(panel._current_oklab)
     assert committed_lightness == pytest.approx(0.75, abs=1e-3)
 
@@ -456,6 +461,29 @@ def test_readout_panel_spinbox_cancel_applies_latched_external_colour(qtbot):
     spin.editingFinished.emit()
 
     assert panel.readout_state == "IDLE"
+    np.testing.assert_allclose(panel._current_oklab, external, atol=1e-12)
+
+
+def test_readout_panel_spinbox_escape_applies_latch_without_spurious_commit(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+    original = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
+    external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
+    panel.show_colour(original, ChangeKind.COMMIT)
+    received: list[np.ndarray] = []
+    panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
+
+    spin = panel._row_l.spin
+    _send_focus(spin, QtCore.QEvent.FocusIn)
+    spin.lineEdit().selectAll()
+    spin.lineEdit().setText("0.750")
+    panel.show_colour(external, ChangeKind.EXTERNAL)
+    escape = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Escape, QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(spin, escape)
+    spin.editingFinished.emit()
+
+    assert panel.readout_state == "IDLE"
+    assert received == []
     np.testing.assert_allclose(panel._current_oklab, external, atol=1e-12)
 
 

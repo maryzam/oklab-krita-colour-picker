@@ -369,7 +369,7 @@ class _AxisRow(QtWidgets.QWidget):
         self.valueChanged.emit(value, False)
 
     def _on_spin_committed(self) -> None:
-        if self._syncing:
+        if self._syncing or self._edit_start_value is None:
             return
         self.spin.interpretText()
         value = self.value()
@@ -660,7 +660,7 @@ class ReadoutPanel(QtWidgets.QWidget):
         self._build_layout()
         # Initial slider tracks at a sensible default so the panel paints
         # something before the first colour arrives.
-        self.show_colour(np.array([0.5, 0.0, 0.0], dtype=float), _INITIAL_KIND)
+        self.show_colour(np.array([0.5, 0.0, 0.0], dtype=float))
         self._previous_oklab = None
         self._swatch.set_revert_target(None)
 
@@ -862,10 +862,3 @@ def _is_preview_kind(kind: object | None) -> bool:
     # Avoid importing controller.ChangeKind in the widget layer; the controller
     # broadcast contract exposes PREVIEW by enum name.
     return getattr(kind, "name", None) == "PREVIEW"
-
-
-class _InitialKind:
-    name = "INITIAL"
-
-
-_INITIAL_KIND = _InitialKind()
