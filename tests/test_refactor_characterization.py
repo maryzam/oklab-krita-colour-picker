@@ -16,7 +16,6 @@ from oklab_colour_picker.selector_models import (
     LightnessChromaSliceModel,
     LightnessSliceModel,
 )
-from oklab_colour_picker.selector_interaction import StateKind
 from oklab_colour_picker.widgets import (
     HueLightnessSliceDiskWidget,
     LightnessSliceDiskWidget,
@@ -397,9 +396,10 @@ def _keyboard_start_point(widget, size):
         event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
         QtWidgets.QApplication.sendEvent(widget, event)
         if event.isAccepted():
-            # Probing a keypress enters KEYBOARD; reset before handing the
-            # point back.
-            widget._force_state_for_test(StateKind.IDLE)
+            release = QtGui.QKeyEvent(QtCore.QEvent.KeyRelease, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
+            QtWidgets.QApplication.sendEvent(widget, release)
+            widget.resize(widget.width() + 1, widget.height() + 1)
+            widget.resize(*size)
             widget.set_selected_colour(colour)
             return point
     raise AssertionError("could not find keyboard-nudgeable point")

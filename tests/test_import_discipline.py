@@ -270,6 +270,7 @@ def test_selector_interaction_has_no_string_state_factory():
     source = (ROOT / "oklab_colour_picker" / "selector_interaction.py").read_text()
 
     assert "state_from_name" not in source
+    assert "force_for_test" not in source
 
 
 def test_selector_interaction_dispatch_uses_command_objects():

@@ -9,7 +9,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import renderers, selector_interaction
 from oklab_colour_picker.controller import normalize_oklab_for_krita
-from oklab_colour_picker.selector_interaction import Indicator, Pick, PickResult, Ring, StateKind
+from oklab_colour_picker.selector_interaction import Indicator, Pick, PickResult, Ring
 from oklab_colour_picker.selector_models import SelectorModel
 
 
@@ -44,12 +44,6 @@ class SelectorWidget(QtWidgets.QWidget):
     @property
     def transition_log(self) -> tuple[str, ...]:
         return self._interaction.transition_log
-
-    def _force_state_for_test(
-        self, kind: StateKind, *, anchor: tuple[float, float] | None = None
-    ) -> None:
-        self._interaction.force_for_test(kind, colour=self._selected_colour, anchor=anchor)
-        self.update()
 
     def _apply_interaction(self, result: selector_interaction.InteractionResult) -> None:
         self.update()

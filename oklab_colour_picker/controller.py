@@ -235,8 +235,12 @@ class ColourPickerController:
         if committed is None:
             restored = None if selection_before_commit is None else selection_before_commit.copy()
             self._selected_colour = restored
-            if restored is not None:
-                self._broadcast(restored, ChangeKind.ROLLBACK)
+            if restored is None:
+                # With no prior concrete colour there is nothing valid to
+                # replay; keep the listener contract non-None and let the next
+                # foreground sync or user action supply a controller state.
+                return
+            self._broadcast(restored, ChangeKind.ROLLBACK)
             return
 
         self._commit_token += 1

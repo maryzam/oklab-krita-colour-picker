@@ -15,7 +15,6 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from oklab_colour_picker import color_math
 from oklab_colour_picker.controller import normalize_oklab_for_krita
 from oklab_colour_picker.selector_models import LightnessChromaSliceModel, LightnessSliceModel
-from oklab_colour_picker.selector_interaction import StateKind
 from oklab_colour_picker.widgets import SelectorWidget
 
 
@@ -192,7 +191,9 @@ def test_inv5_show_colour_emits_no_intent_signals(qtbot):
     widget.committed.connect(commits.append)
 
     widget.show_colour(widget.model.color_at_position((20, 16), SIZE))
-    widget._force_state_for_test(StateKind.PINNED, anchor=(1.0, 1.0))
+    _press_release(widget, _valid_point(widget.model))
+    previews.clear()
+    commits.clear()
     widget.show_colour(widget.model.color_at_position((30, 8), SIZE))
 
     assert previews == []
@@ -239,7 +240,9 @@ def test_state_coverage_every_state_is_entered(qtbot):
     _mouse(widget, QtCore.QEvent.MouseButtonRelease, point, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
     seen.add(widget.state)  # PINNED
 
-    widget._force_state_for_test(StateKind.IDLE)
+    widget.resize(widget.width() + 1, widget.height() + 1)
+    widget.resize(*SIZE)
+    assert widget.state == "IDLE"
     widget.show_colour(widget.model.color_at_position((point.x(), point.y()), SIZE))
     press = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
     QtWidgets.QApplication.sendEvent(widget, press)

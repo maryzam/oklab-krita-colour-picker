@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar, Callable, Protocol
+from typing import ClassVar, Protocol
 
 
 Position = tuple[float, float]
@@ -257,6 +257,8 @@ class Idle(State):
     kind: ClassVar[StateKind] = StateKind.IDLE
 
     def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
+        # The controller currently broadcasts only concrete colours; accepting
+        # None keeps direct/programmatic clears well-defined for the facade.
         ctx.set_colour(colour)
         return InteractionResult(self, rendered_broadcast=True)
 
@@ -403,20 +405,6 @@ class SelectorInteraction:
     def navigation_origin(self, ctx: Ctx, fallback: Position) -> Position | None:
         return self._state.navigation_origin(ctx, fallback)
 
-    def force_for_test(
-        self,
-        kind: StateKind,
-        *,
-        colour: object | None = None,
-        anchor: Position | None = None,
-    ) -> None:
-        try:
-            factory = _STATE_FACTORIES[kind]
-        except KeyError as err:
-            raise ValueError(f"unknown selector state: {kind!r}")
-        state = factory(colour, anchor or (0.0, 0.0))
-        self._adopt(state)
-
     def _adopt(self, state: State) -> None:
         if state.kind is not self._state.kind:
             self._transition_log.append(state.kind)
@@ -430,35 +418,9 @@ def _drag_colour(picked: Pick, *, has_last_valid: bool) -> object | None:
         case SnappedPick(colour=colour) if has_last_valid:
             return colour
         case InvalidPick() | SnappedPick():
+            # Snapping starts only after a drag has first owned a valid colour;
+            # an off-gamut press stays cancellable and restores the prior state.
             return None
-
-
-StateFactory = Callable[[object | None, Position], State]
-
-
-def _new_idle(_colour: object | None, _anchor: Position) -> State:
-    return Idle()
-
-
-def _new_dragging(colour: object | None, anchor: Position) -> State:
-    return Dragging(anchor, colour, None)
-
-
-def _new_keyboard(_colour: object | None, anchor: Position) -> State:
-    return Keyboard(anchor)
-
-
-def _new_pinned(colour: object | None, anchor: Position) -> State:
-    return Pinned(colour, anchor)
-
-
-_STATE_FACTORIES: dict[StateKind, StateFactory] = {
-    StateKind.IDLE: _new_idle,
-    StateKind.DRAGGING: _new_dragging,
-    StateKind.KEYBOARD: _new_keyboard,
-    StateKind.PINNED: _new_pinned,
-}
-
 
 def _position(point: Point) -> Position:
     return float(point[0]), float(point[1])
