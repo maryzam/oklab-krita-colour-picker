@@ -52,6 +52,7 @@ class SelectorMode(str, Enum):
 
 
 ModelFactory = Callable[[float, float, float], object]
+CoordinateFactory = Callable[[float, float, float], float]
 WidgetFactory = Callable[[object, QtWidgets.QWidget], SelectorWidget]
 
 
@@ -60,7 +61,14 @@ class ModeSpec:
     label: str
     object_name: str
     model_factory: ModelFactory
+    coordinate_factory: CoordinateFactory
     widget_factory: WidgetFactory
+
+
+@dataclass(frozen=True)
+class SliceModelCacheEntry:
+    coordinate: float
+    model: object
 
 
 def _lightness_slice_model(lightness: float, _chroma: float, _hue: float) -> object:
@@ -73,6 +81,18 @@ def _hue_lightness_slice_model(_lightness: float, chroma: float, _hue: float) ->
 
 def _lightness_chroma_slice_model(_lightness: float, _chroma: float, hue: float) -> object:
     return LightnessChromaSliceModel(hue=hue)
+
+
+def _lightness_coordinate(lightness: float, _chroma: float, _hue: float) -> float:
+    return lightness
+
+
+def _chroma_coordinate(_lightness: float, chroma: float, _hue: float) -> float:
+    return chroma
+
+
+def _hue_coordinate(_lightness: float, _chroma: float, hue: float) -> float:
+    return hue
 
 
 def _selector_widget(model: object, parent: QtWidgets.QWidget) -> SelectorWidget:
@@ -96,18 +116,21 @@ MODE_SPECS = {
         "Hue/Chroma",
         "lightness-slice-selector",
         _lightness_slice_model,
+        _lightness_coordinate,
         _lightness_slice_widget,
     ),
     SelectorMode.HUE_LIGHTNESS_SLICE: ModeSpec(
         "Hue/Lightness",
         "hue-lightness-slice-selector",
         _hue_lightness_slice_model,
+        _chroma_coordinate,
         _hue_lightness_slice_widget,
     ),
     SelectorMode.LIGHTNESS_CHROMA_SLICE: ModeSpec(
         "Lightness/Chroma",
         "lightness-chroma-slice-selector",
         _lightness_chroma_slice_model,
+        _hue_coordinate,
         _selector_widget,
     ),
 }
@@ -125,6 +148,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         self._selector_modes = tuple(MODE_SPECS)
         self._tabs = QtWidgets.QTabWidget(self)
         self._selectors: dict[SelectorMode, QtWidgets.QWidget] = {}
+        self._selector_model_cache: dict[SelectorMode, SliceModelCacheEntry] = {}
         self._readout_panel = ReadoutPanel(self)
         self._readout_panel.previewed.connect(self._preview_colour)
         self._readout_panel.committed.connect(self._commit_colour)
@@ -197,7 +221,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
             return existing
 
         seed = self._view_seed_colour
-        widget = _build_selector_widget(mode, _model_for_colour(mode, seed), self)
+        widget = _build_selector_widget(mode, self._cached_model_for_colour(mode, seed), self)
         widget.setObjectName(_mode_spec(mode).object_name)
         self._seed_selector(widget, seed)
         widget.previewed.connect(self._preview_colour)
@@ -227,7 +251,16 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         layout.addWidget(self._readout_panel)
 
     def _selector_model_factory(self, mode: SelectorMode, colour: np.ndarray) -> Callable[[], object]:
-        return lambda: _model_for_colour(mode, colour)
+        return lambda: self._cached_model_for_colour(mode, colour)
+
+    def _cached_model_for_colour(self, mode: SelectorMode, colour: np.ndarray) -> object:
+        coordinate = _fixed_slice_coordinate(mode, colour)
+        cached = self._selector_model_cache.get(mode)
+        if cached is not None and _same_coordinate(cached.coordinate, coordinate):
+            return cached.model
+        model = _model_for_colour(mode, colour)
+        self._selector_model_cache[mode] = SliceModelCacheEntry(coordinate, model)
+        return model
 
     def _seed_selector(self, widget: SelectorWidget, colour: np.ndarray) -> None:
         widget.show_colour(colour, ChangeKind.INITIAL)
@@ -289,11 +322,25 @@ def _build_selector_widget(
 
 
 def _model_for_colour(mode: SelectorMode, oklab: Sequence[float]) -> object:
-    lightness, chroma, hue = color_math.oklab_to_oklch(_as_oklab(oklab))
-    lightness = float(np.clip(lightness, 0.0, 1.0))
-    chroma = max(0.0, float(chroma))
-    hue = float(hue % math.tau)
+    lightness, chroma, hue = _normalized_oklch(oklab)
     return _mode_spec(mode).model_factory(lightness, chroma, hue)
+
+
+def _fixed_slice_coordinate(mode: SelectorMode, oklab: Sequence[float]) -> float:
+    return _mode_spec(mode).coordinate_factory(*_normalized_oklch(oklab))
+
+
+def _normalized_oklch(oklab: Sequence[float]) -> tuple[float, float, float]:
+    lightness, chroma, hue = color_math.oklab_to_oklch(_as_oklab(oklab))
+    return (
+        float(np.clip(lightness, 0.0, 1.0)),
+        max(0.0, float(chroma)),
+        float(hue % math.tau),
+    )
+
+
+def _same_coordinate(left: float, right: float) -> bool:
+    return math.isclose(left, right, rel_tol=0.0, abs_tol=1e-12)
 
 
 def _mode_spec(mode: SelectorMode) -> ModeSpec:

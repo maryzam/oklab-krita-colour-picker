@@ -216,6 +216,70 @@ def test_preview_reuses_equal_selector_models(qtbot):
         assert panel.selector_for_mode(mode).model is model
 
 
+def test_preview_skips_slice_model_rebuild_when_fixed_coordinate_is_unchanged(
+    qtbot, monkeypatch
+):
+    controller = FakeController()
+    original = dock_module._model_for_colour
+    model_calls = []
+
+    def counted_model_for_colour(mode, colour):
+        model_calls.append(mode)
+        return original(mode, colour)
+
+    monkeypatch.setattr(dock_module, "_model_for_colour", counted_model_for_colour)
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    for mode in SelectorMode:
+        panel.selector_for_mode(mode)
+
+    model_calls.clear()
+    hue = 1.25
+    panel.set_selected_colour(color_math.oklch_to_oklab([0.40, 0.06, hue]), committed=False)
+    panel.set_selected_colour(color_math.oklch_to_oklab([0.65, 0.11, hue]), committed=False)
+
+    assert model_calls.count(SelectorMode.LIGHTNESS_SLICE) == 2
+    assert model_calls.count(SelectorMode.HUE_LIGHTNESS_SLICE) == 2
+    assert model_calls.count(SelectorMode.LIGHTNESS_CHROMA_SLICE) == 1
+
+
+def test_active_selector_model_is_not_rebuilt_during_drag(qtbot, monkeypatch):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    active = panel.active_selector
+    active.resize(120, 80)
+
+    original = dock_module._model_for_colour
+    model_calls = []
+
+    def counted_model_for_colour(mode, colour):
+        model_calls.append(mode)
+        return original(mode, colour)
+
+    monkeypatch.setattr(dock_module, "_model_for_colour", counted_model_for_colour)
+
+    press = QtGui.QMouseEvent(
+        QtCore.QEvent.MouseButtonPress,
+        QtCore.QPoint(60, 40),
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.NoModifier,
+    )
+    move = QtGui.QMouseEvent(
+        QtCore.QEvent.MouseMove,
+        QtCore.QPoint(64, 40),
+        QtCore.Qt.NoButton,
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.NoModifier,
+    )
+    QtCore.QCoreApplication.sendEvent(active, press)
+    QtCore.QCoreApplication.sendEvent(active, move)
+
+    assert active.state == "DRAGGING"
+    assert model_calls == []
+
+
 def test_external_foreground_sync_updates_all_selector_views(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
