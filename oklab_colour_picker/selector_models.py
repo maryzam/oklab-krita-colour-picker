@@ -8,6 +8,7 @@ from oklab_colour_picker.models import (
     Position,
     SelectorModel,
     Size,
+    SnappedSelection,
 )
 from oklab_colour_picker.models.geometry import (
     disk_geometry,
@@ -25,5 +26,6 @@ __all__ = [
     "Position",
     "SelectorModel",
     "Size",
+    "SnappedSelection",
     "_position_from_circle",
 ]

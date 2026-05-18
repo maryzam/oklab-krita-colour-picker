@@ -200,6 +200,31 @@ def test_achromatic_hue_lightness_drag_outside_keeps_cursor_hue_anchor(qtbot):
     np.testing.assert_allclose(widget.selected_colour, expected)
 
 
+def test_hue_lightness_out_of_zone_pick_computes_snap_once(qtbot, monkeypatch):
+    from oklab_colour_picker.models import hue_lightness_slice
+
+    widget = SelectorWidget(HueLightnessSliceModel(chroma=0.2))
+    widget.resize(101, 101)
+    qtbot.addWidget(widget)
+    widget.show()
+    point = (50.0, 50.0)
+    assert widget.model.color_at_position(point, _size(widget)) is None
+
+    original = hue_lightness_slice._snap_lightness_to_gamut
+    calls = []
+
+    def counted_snap(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(hue_lightness_slice, "_snap_lightness_to_gamut", counted_snap)
+
+    pick = widget.pick(point)
+
+    assert pick is not None
+    assert len(calls) == 1
+
+
 def test_leave_during_drag_does_not_emit_invalid_preview(qtbot):
     widget = SelectorWidget(LightnessChromaSliceModel(hue=0.0))
     widget.resize(64, 32)

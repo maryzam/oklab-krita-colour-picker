@@ -127,14 +127,12 @@ class SelectorWidget(QtWidgets.QWidget):
         colour = self.color_at(point)
         if colour is not None:
             return PickResult.exact(colour)
-        snapped = self._model.snapped_color_at_position((point[0], point[1]), _widget_size(self))
+        snapped = self._model.snapped_selection_at_position(
+            (point[0], point[1]),
+            _widget_size(self),
+        )
         if snapped is not None:
-            snapped_position = self._model.snapped_position_at_position(
-                (point[0], point[1]),
-                _widget_size(self),
-            )
-            if snapped_position is not None:
-                return PickResult.snapped(snapped, snapped_position)
+            return PickResult.snapped(snapped.colour, snapped.position)
         return PickResult.invalid()
 
     def color_at(self, point: tuple[float, float]) -> np.ndarray | None:
