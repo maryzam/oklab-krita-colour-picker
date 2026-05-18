@@ -30,6 +30,12 @@ class IndicatorSpec:
     out_of_gamut: bool = False
 
 
+@dataclass(frozen=True)
+class SnappedSelection:
+    colour: np.ndarray
+    position: Position
+
+
 class SelectorModel(ABC):
     """Pure coordinate contract shared by selector widgets and renderers."""
 
@@ -56,6 +62,25 @@ class SelectorModel(ABC):
         """Return a drag-continuity snap colour or ``None`` for strict models."""
 
         return None
+
+    def snapped_position_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> Position | None:
+        snapped = self.snapped_color_at_position(position, size)
+        if snapped is None:
+            return None
+        return self.position_for_color(snapped, size)
+
+    def snapped_selection_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> SnappedSelection | None:
+        snapped = self.snapped_color_at_position(position, size)
+        if snapped is None:
+            return None
+        snapped_position = self.position_for_color(snapped, size)
+        if snapped_position is None:
+            return None
+        return SnappedSelection(snapped, snapped_position)
 
     def indicator_for_color(
         self, oklab: Sequence[float], size: Sequence[float]

@@ -55,14 +55,14 @@ def test_dock_panel_initializes_only_active_selector_view(qtbot):
 
 def test_dock_panel_initializes_only_active_selector_model(qtbot, monkeypatch):
     controller = FakeController()
-    original = dock_module._model_for_colour
+    original = dock_module._model_for_oklch
     model_calls = []
 
-    def counted_model_for_colour(mode, colour):
+    def counted_model_for_oklch(mode, oklch):
         model_calls.append(mode)
-        return original(mode, colour)
+        return original(mode, oklch)
 
-    monkeypatch.setattr(dock_module, "_model_for_colour", counted_model_for_colour)
+    monkeypatch.setattr(dock_module, "_model_for_oklch", counted_model_for_oklch)
 
     panel = ColourPickerDockPanel(controller)
     qtbot.addWidget(panel)
@@ -197,6 +197,39 @@ def test_click_on_achromatic_hue_lightness_slice_keeps_indicator_at_click(qtbot)
     assert indicator == pytest.approx((float(click.x()), float(click.y())))
 
 
+def test_real_controller_achromatic_hue_lightness_commit_keeps_emitter_pinned(qtbot):
+    from oklab_colour_picker.controller import ColourPickerController, normalize_oklab_for_krita
+
+    class NormalizingAdapter:
+        def __init__(self):
+            self.foreground = color_math.oklch_to_oklab([0.5, 0.0, 0.0])
+
+        def set_foreground(self, oklab):
+            self.foreground = normalize_oklab_for_krita(oklab)
+            return self.foreground.copy()
+
+        def get_foreground(self):
+            return self.foreground.copy()
+
+    class ImmediateScheduler:
+        def call_soon(self, callback):
+            callback()
+
+    controller = ColourPickerController(NormalizingAdapter(), scheduler=ImmediateScheduler())
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    panel.set_mode(SelectorMode.HUE_LIGHTNESS_SLICE)
+    active = panel.active_selector
+    active.resize(121, 121)
+
+    click = QtCore.QPoint(60, 20)
+    _send_mouse(active, QtCore.QEvent.MouseButtonPress, click, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(active, QtCore.QEvent.MouseButtonRelease, click, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    assert active.state == "PINNED"
+    assert active.indicator_position() == pytest.approx((float(click.x()), float(click.y())))
+
+
 def test_preview_reuses_equal_selector_models(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
@@ -214,6 +247,177 @@ def test_preview_reuses_equal_selector_models(qtbot):
 
     for mode, model in models.items():
         assert panel.selector_for_mode(mode).model is model
+
+
+def test_preview_skips_slice_model_rebuild_when_fixed_coordinate_is_unchanged(
+    qtbot, monkeypatch
+):
+    controller = FakeController()
+    original = dock_module._model_for_oklch
+    model_calls = []
+
+    def counted_model_for_oklch(mode, oklch):
+        model_calls.append(mode)
+        return original(mode, oklch)
+
+    monkeypatch.setattr(dock_module, "_model_for_oklch", counted_model_for_oklch)
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    for mode in SelectorMode:
+        panel.selector_for_mode(mode)
+
+    model_calls.clear()
+    hue = 1.25
+    panel.set_selected_colour(color_math.oklch_to_oklab([0.40, 0.06, hue]), committed=False)
+    panel.set_selected_colour(color_math.oklch_to_oklab([0.65, 0.11, hue]), committed=False)
+
+    assert model_calls.count(SelectorMode.LIGHTNESS_SLICE) == 2
+    assert model_calls.count(SelectorMode.HUE_LIGHTNESS_SLICE) == 2
+    assert model_calls.count(SelectorMode.LIGHTNESS_CHROMA_SLICE) == 1
+
+
+def test_drag_rebuilds_only_background_models_whose_fixed_coordinate_changes(
+    qtbot, monkeypatch
+):
+    controller = FakeController()
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    for mode in SelectorMode:
+        panel.selector_for_mode(mode)
+    panel.set_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
+    active = panel.active_selector
+    active.resize(120, 80)
+    initial_coordinates = {
+        mode: entry.coordinate
+        for mode, entry in panel._selector_model_cache.items()
+    }
+
+    original = dock_module._model_for_oklch
+    model_calls = []
+
+    def counted_model_for_oklch(mode, oklch):
+        model_calls.append(mode)
+        return original(mode, oklch)
+
+    monkeypatch.setattr(dock_module, "_model_for_oklch", counted_model_for_oklch)
+
+    press = QtGui.QMouseEvent(
+        QtCore.QEvent.MouseButtonPress,
+        QtCore.QPoint(20, 20),
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.NoModifier,
+    )
+    move = QtGui.QMouseEvent(
+        QtCore.QEvent.MouseMove,
+        QtCore.QPoint(20, 40),
+        QtCore.Qt.NoButton,
+        QtCore.Qt.LeftButton,
+        QtCore.Qt.NoModifier,
+    )
+    QtCore.QCoreApplication.sendEvent(active, press)
+    QtCore.QCoreApplication.sendEvent(active, move)
+
+    assert active.state == "DRAGGING"
+    assert len(controller.previews) == 2
+    expected_counts = _expected_rebuild_counts(initial_coordinates, controller.previews)
+    assert model_calls.count(SelectorMode.LIGHTNESS_SLICE) == expected_counts[SelectorMode.LIGHTNESS_SLICE]
+    assert model_calls.count(SelectorMode.HUE_LIGHTNESS_SLICE) == expected_counts[SelectorMode.HUE_LIGHTNESS_SLICE]
+    assert SelectorMode.LIGHTNESS_CHROMA_SLICE not in model_calls
+
+
+def test_slice_model_cache_returns_same_instance_for_same_fixed_coordinate(qtbot):
+    panel = ColourPickerDockPanel(FakeController())
+    qtbot.addWidget(panel)
+    hue = 1.25
+
+    first = panel._cached_model_for_colour(
+        SelectorMode.LIGHTNESS_CHROMA_SLICE,
+        color_math.oklch_to_oklab([0.40, 0.06, hue]),
+    )
+    second = panel._cached_model_for_colour(
+        SelectorMode.LIGHTNESS_CHROMA_SLICE,
+        color_math.oklch_to_oklab([0.65, 0.11, hue]),
+    )
+
+    assert second is first
+
+
+def test_slice_model_cache_replaces_entry_when_fixed_coordinate_changes(qtbot):
+    panel = ColourPickerDockPanel(FakeController())
+    qtbot.addWidget(panel)
+
+    first = panel._cached_model_for_colour(
+        SelectorMode.LIGHTNESS_CHROMA_SLICE,
+        color_math.oklch_to_oklab([0.50, 0.06, 0.25]),
+    )
+    second = panel._cached_model_for_colour(
+        SelectorMode.LIGHTNESS_CHROMA_SLICE,
+        color_math.oklch_to_oklab([0.50, 0.06, 0.75]),
+    )
+
+    assert second is not first
+
+
+def test_slice_model_cache_treats_hue_seam_as_same_slice(qtbot):
+    panel = ColourPickerDockPanel(FakeController())
+    qtbot.addWidget(panel)
+
+    first = panel._cached_model_for_colour(
+        SelectorMode.LIGHTNESS_CHROMA_SLICE,
+        color_math.oklch_to_oklab([0.50, 0.06, 1e-12]),
+    )
+    second = panel._cached_model_for_colour(
+        SelectorMode.LIGHTNESS_CHROMA_SLICE,
+        color_math.oklch_to_oklab([0.50, 0.06, math.tau - 1e-12]),
+    )
+
+    assert second is first
+
+
+def test_slice_model_cache_canonicalizes_achromatic_hue(qtbot):
+    panel = ColourPickerDockPanel(FakeController())
+    qtbot.addWidget(panel)
+
+    hue = 1.25
+    first = panel._cached_model_for_colour(
+        SelectorMode.LIGHTNESS_CHROMA_SLICE,
+        color_math.oklch_to_oklab([0.40, 1e-12, hue]),
+    )
+    second = panel._cached_model_for_colour(
+        SelectorMode.LIGHTNESS_CHROMA_SLICE,
+        np.array([0.70, 0.0, 0.0], dtype=float),
+    )
+
+    assert second is first
+    assert first.hue == pytest.approx(hue)
+
+
+@pytest.mark.parametrize(
+    "mode,first,second",
+    [
+        (
+            SelectorMode.LIGHTNESS_SLICE,
+            [0.42, 0.03, 0.20],
+            [0.42, 0.11, 2.40],
+        ),
+        (
+            SelectorMode.HUE_LIGHTNESS_SLICE,
+            [0.35, 0.07, 0.20],
+            [0.78, 0.07, 2.40],
+        ),
+        (
+            SelectorMode.LIGHTNESS_CHROMA_SLICE,
+            [0.35, 0.07, 1.25],
+            [0.78, 0.13, 1.25],
+        ),
+    ],
+)
+def test_slice_model_specs_depend_only_on_their_fixed_coordinate(mode, first, second):
+    first_model = dock_module._model_for_oklch(mode, tuple(first))
+    second_model = dock_module._model_for_oklch(mode, tuple(second))
+
+    assert second_model == first_model
 
 
 def test_external_foreground_sync_updates_all_selector_views(qtbot):
@@ -378,6 +582,7 @@ def test_created_krita_dock_syncs_foreground_on_canvas_change(qtbot):
     dock.canvasChanged(object())
 
     assert controller.sync_count == sync_count + 1
+    assert controller.last_force_sync is True
 
 
 def test_dock_shows_friendly_message_when_numpy_is_missing(qtbot, monkeypatch):
@@ -526,6 +731,32 @@ def test_package_exports_register_plugin():
     assert oklab_colour_picker.register_plugin is register_plugin
 
 
+def _send_mouse(widget, event_type, point, button, buttons):
+    event = QtGui.QMouseEvent(
+        event_type,
+        point,
+        button,
+        buttons,
+        QtCore.Qt.NoModifier,
+    )
+    QtCore.QCoreApplication.sendEvent(widget, event)
+    return event
+
+
+def _expected_rebuild_counts(initial_coordinates, colours):
+    coordinates = dict(initial_coordinates)
+    counts = {mode: 0 for mode in SelectorMode}
+    for colour in colours:
+        oklch = dock_module._normalized_oklch(colour)
+        for mode in SelectorMode:
+            coordinate = dock_module._fixed_slice_coordinate(mode, oklch)
+            if coordinates[mode].equivalent_to(coordinate):
+                continue
+            counts[mode] += 1
+            coordinates[mode] = coordinate
+    return counts
+
+
 class FakeController:
     def __init__(self, selected_colour=None):
         self.previews = []
@@ -552,8 +783,9 @@ class FakeController:
     def set_dock_visible(self, visible):
         self.visibility.append(bool(visible))
 
-    def sync_external_foreground(self):
+    def sync_external_foreground(self, *, force=False):
         self.sync_count += 1
+        self.last_force_sync = bool(force)
         return False
 
     def add_colour_listener(self, listener):

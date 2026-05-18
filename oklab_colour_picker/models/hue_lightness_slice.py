@@ -14,6 +14,7 @@ from oklab_colour_picker.models.base import (
     IndicatorSpec,
     Position,
     SelectorModel,
+    SnappedSelection,
     indicator_from_positions,
 )
 from oklab_colour_picker.models.geometry import (
@@ -111,16 +112,29 @@ class HueLightnessSliceModel(SelectorModel):
     ) -> np.ndarray | None:
         """Nearest in-gamut colour along the cursor's hue spoke."""
 
-        geometry = circle_geometry_projected(position, size)
-        if geometry is None:
+        snapped = self._snapped_lightness_and_hue(position, size)
+        if snapped is None:
             return None
-
-        normalized_radius, hue = geometry
-        desired_lightness = 1.0 - normalized_radius
-        lightness = _snap_lightness_to_gamut(self.chroma, hue, desired_lightness)
-        if lightness is None:
-            return None
+        lightness, hue = snapped
         return color_math.oklch_to_oklab([lightness, self.chroma, hue])
+
+    def snapped_position_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> Position | None:
+        snapped = self.snapped_selection_at_position(position, size)
+        return None if snapped is None else snapped.position
+
+    def snapped_selection_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> SnappedSelection | None:
+        snapped = self._snapped_lightness_and_hue(position, size)
+        if snapped is None:
+            return None
+        lightness, hue = snapped
+        return SnappedSelection(
+            color_math.oklch_to_oklab([lightness, self.chroma, hue]),
+            position_from_circle(1.0 - lightness, hue, size),
+        )
 
     def indicator_for_color(
         self, oklab: Sequence[float], size: Sequence[float]
@@ -158,6 +172,25 @@ class HueLightnessSliceModel(SelectorModel):
         if snapped is None:
             return None
         return position_from_circle(1.0 - snapped, hue, (width, height))
+
+    def _snapped_lightness_and_hue(
+        self,
+        position: Sequence[float],
+        size: Sequence[float],
+    ) -> tuple[float, float] | None:
+        geometry = circle_geometry_projected(position, size)
+        if geometry is None:
+            return None
+
+        normalized_radius, hue = geometry
+        lightness = _snap_lightness_to_gamut(
+            self.chroma,
+            hue,
+            1.0 - normalized_radius,
+        )
+        if lightness is None:
+            return None
+        return lightness, hue
 
 
 def _snap_lightness_to_gamut(chroma: float, hue: float, desired_lightness: float) -> float | None:
