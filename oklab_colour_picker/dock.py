@@ -52,8 +52,11 @@ class SelectorMode(str, Enum):
 
 
 ModelFactory = Callable[[float, float, float], object]
-CoordinateFactory = Callable[[float, float, float], float]
+CoordinateFactory = Callable[[float, float, float], "SliceCoordinate"]
 WidgetFactory = Callable[[object, QtWidgets.QWidget], SelectorWidget]
+
+KRITA_8BIT_COORDINATE_TOLERANCE = 1.0 / (255.0 ** 3)
+ACHROMATIC_CHROMA_TOLERANCE = KRITA_8BIT_COORDINATE_TOLERANCE
 
 
 @dataclass(frozen=True)
@@ -67,8 +70,43 @@ class ModeSpec:
 
 @dataclass(frozen=True)
 class SliceModelCacheEntry:
-    coordinate: float
+    """Cached model for a mode whose model is pure over its slice coordinate."""
+
+    coordinate: "SliceCoordinate"
     model: object
+
+
+class SliceCoordinate(Protocol):
+    def equivalent_to(self, other: "SliceCoordinate") -> bool:
+        ...
+
+
+@dataclass(frozen=True)
+class LinearSliceCoordinate:
+    value: float
+
+    def equivalent_to(self, other: SliceCoordinate) -> bool:
+        return (
+            isinstance(other, LinearSliceCoordinate)
+            and math.isclose(
+                self.value,
+                other.value,
+                rel_tol=0.0,
+                abs_tol=KRITA_8BIT_COORDINATE_TOLERANCE,
+            )
+        )
+
+
+@dataclass(frozen=True)
+class HueSliceCoordinate:
+    radians: float
+
+    def equivalent_to(self, other: SliceCoordinate) -> bool:
+        return (
+            isinstance(other, HueSliceCoordinate)
+            and _circular_distance(self.radians, other.radians)
+            <= KRITA_8BIT_COORDINATE_TOLERANCE
+        )
 
 
 def _lightness_slice_model(lightness: float, _chroma: float, _hue: float) -> object:
@@ -79,20 +117,20 @@ def _hue_lightness_slice_model(_lightness: float, chroma: float, _hue: float) ->
     return HueLightnessSliceModel(chroma=chroma)
 
 
-def _lightness_chroma_slice_model(_lightness: float, _chroma: float, hue: float) -> object:
-    return LightnessChromaSliceModel(hue=hue)
+def _lightness_chroma_slice_model(_lightness: float, chroma: float, hue: float) -> object:
+    return LightnessChromaSliceModel(hue=_canonical_hue(chroma, hue))
 
 
-def _lightness_coordinate(lightness: float, _chroma: float, _hue: float) -> float:
-    return lightness
+def _lightness_coordinate(lightness: float, _chroma: float, _hue: float) -> SliceCoordinate:
+    return LinearSliceCoordinate(lightness)
 
 
-def _chroma_coordinate(_lightness: float, chroma: float, _hue: float) -> float:
-    return chroma
+def _chroma_coordinate(_lightness: float, chroma: float, _hue: float) -> SliceCoordinate:
+    return LinearSliceCoordinate(chroma)
 
 
-def _hue_coordinate(_lightness: float, _chroma: float, hue: float) -> float:
-    return hue
+def _hue_coordinate(_lightness: float, chroma: float, hue: float) -> SliceCoordinate:
+    return HueSliceCoordinate(_canonical_hue(chroma, hue))
 
 
 def _selector_widget(model: object, parent: QtWidgets.QWidget) -> SelectorWidget:
@@ -254,11 +292,12 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         return lambda: self._cached_model_for_colour(mode, colour)
 
     def _cached_model_for_colour(self, mode: SelectorMode, colour: np.ndarray) -> object:
-        coordinate = _fixed_slice_coordinate(mode, colour)
+        lch = _normalized_oklch(colour)
+        coordinate = _fixed_slice_coordinate(mode, lch)
         cached = self._selector_model_cache.get(mode)
-        if cached is not None and _same_coordinate(cached.coordinate, coordinate):
+        if cached is not None and cached.coordinate.equivalent_to(coordinate):
             return cached.model
-        model = _model_for_colour(mode, colour)
+        model = _model_for_oklch(mode, lch)
         self._selector_model_cache[mode] = SliceModelCacheEntry(coordinate, model)
         return model
 
@@ -322,12 +361,19 @@ def _build_selector_widget(
 
 
 def _model_for_colour(mode: SelectorMode, oklab: Sequence[float]) -> object:
-    lightness, chroma, hue = _normalized_oklch(oklab)
+    return _model_for_oklch(mode, _normalized_oklch(oklab))
+
+
+def _model_for_oklch(mode: SelectorMode, oklch: tuple[float, float, float]) -> object:
+    lightness, chroma, hue = oklch
     return _mode_spec(mode).model_factory(lightness, chroma, hue)
 
 
-def _fixed_slice_coordinate(mode: SelectorMode, oklab: Sequence[float]) -> float:
-    return _mode_spec(mode).coordinate_factory(*_normalized_oklch(oklab))
+def _fixed_slice_coordinate(
+    mode: SelectorMode,
+    oklch: tuple[float, float, float],
+) -> SliceCoordinate:
+    return _mode_spec(mode).coordinate_factory(*oklch)
 
 
 def _normalized_oklch(oklab: Sequence[float]) -> tuple[float, float, float]:
@@ -339,8 +385,15 @@ def _normalized_oklch(oklab: Sequence[float]) -> tuple[float, float, float]:
     )
 
 
-def _same_coordinate(left: float, right: float) -> bool:
-    return math.isclose(left, right, rel_tol=0.0, abs_tol=1e-12)
+def _circular_distance(left: float, right: float) -> float:
+    distance = abs((left - right) % math.tau)
+    return min(distance, math.tau - distance)
+
+
+def _canonical_hue(chroma: float, hue: float) -> float:
+    if chroma <= ACHROMATIC_CHROMA_TOLERANCE:
+        return 0.0
+    return hue % math.tau
 
 
 def _mode_spec(mode: SelectorMode) -> ModeSpec:
