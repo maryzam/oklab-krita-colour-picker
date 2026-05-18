@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Protocol, Sequence
 
@@ -50,16 +51,65 @@ class SelectorMode(str, Enum):
     LIGHTNESS_CHROMA_SLICE = "lightness_chroma_slice"
 
 
-MODE_LABELS = {
-    SelectorMode.LIGHTNESS_SLICE: "Hue/Chroma",
-    SelectorMode.HUE_LIGHTNESS_SLICE: "Hue/Lightness",
-    SelectorMode.LIGHTNESS_CHROMA_SLICE: "Lightness/Chroma",
-}
+ModelFactory = Callable[[float, float, float], object]
+WidgetFactory = Callable[[object, QtWidgets.QWidget], SelectorWidget]
 
-MODE_OBJECT_NAMES = {
-    SelectorMode.LIGHTNESS_SLICE: "lightness-slice-selector",
-    SelectorMode.HUE_LIGHTNESS_SLICE: "hue-lightness-slice-selector",
-    SelectorMode.LIGHTNESS_CHROMA_SLICE: "lightness-chroma-slice-selector",
+
+@dataclass(frozen=True)
+class ModeSpec:
+    label: str
+    object_name: str
+    model_factory: ModelFactory
+    widget_factory: WidgetFactory
+
+
+def _lightness_slice_model(lightness: float, _chroma: float, _hue: float) -> object:
+    return LightnessSliceModel(lightness=lightness)
+
+
+def _hue_lightness_slice_model(_lightness: float, chroma: float, _hue: float) -> object:
+    return HueLightnessSliceModel(chroma=chroma)
+
+
+def _lightness_chroma_slice_model(_lightness: float, _chroma: float, hue: float) -> object:
+    return LightnessChromaSliceModel(hue=hue)
+
+
+def _selector_widget(model: object, parent: QtWidgets.QWidget) -> SelectorWidget:
+    return SelectorWidget(model, parent)
+
+
+def _lightness_slice_widget(model: object, parent: QtWidgets.QWidget) -> SelectorWidget:
+    from oklab_colour_picker.widgets.lightness_slice_disk import LightnessSliceDiskWidget
+
+    return LightnessSliceDiskWidget(model, parent)
+
+
+def _hue_lightness_slice_widget(model: object, parent: QtWidgets.QWidget) -> SelectorWidget:
+    from oklab_colour_picker.widgets.hue_lightness_slice_disk import HueLightnessSliceDiskWidget
+
+    return HueLightnessSliceDiskWidget(model, parent)
+
+
+MODE_SPECS = {
+    SelectorMode.LIGHTNESS_SLICE: ModeSpec(
+        "Hue/Chroma",
+        "lightness-slice-selector",
+        _lightness_slice_model,
+        _lightness_slice_widget,
+    ),
+    SelectorMode.HUE_LIGHTNESS_SLICE: ModeSpec(
+        "Hue/Lightness",
+        "hue-lightness-slice-selector",
+        _hue_lightness_slice_model,
+        _hue_lightness_slice_widget,
+    ),
+    SelectorMode.LIGHTNESS_CHROMA_SLICE: ModeSpec(
+        "Lightness/Chroma",
+        "lightness-chroma-slice-selector",
+        _lightness_chroma_slice_model,
+        _selector_widget,
+    ),
 }
 
 DEFAULT_COLOUR = np.array([0.5, 0.0, 0.0], dtype=float)
@@ -72,7 +122,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         super().__init__(parent)
         self._controller = controller
         self._view_seed_colour = _selected_or_default(controller.selected_colour)
-        self._selector_modes = tuple(SelectorMode)
+        self._selector_modes = tuple(MODE_SPECS)
         self._tabs = QtWidgets.QTabWidget(self)
         self._selectors: dict[SelectorMode, QtWidgets.QWidget] = {}
         self._readout_panel = ReadoutPanel(self)
@@ -124,7 +174,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         self._view_seed_colour = colour
         for mode, widget in self._selectors.items():
             widget.apply_broadcast(
-                colour, kind, self._selector_model_factory(mode, colour)
+                colour, self._selector_model_factory(mode, colour)
             )
         self._readout_panel.set_current_colour(
             colour, committed=kind is not ChangeKind.PREVIEW
@@ -136,8 +186,8 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
                 widget = self._ensure_selector(mode)
             else:
                 widget = QtWidgets.QWidget(self)
-                widget.setObjectName(f"{MODE_OBJECT_NAMES[mode]}-placeholder")
-            self._tabs.addTab(widget, MODE_LABELS[mode])
+                widget.setObjectName(f"{_mode_spec(mode).object_name}-placeholder")
+            self._tabs.addTab(widget, _mode_spec(mode).label)
 
     def _ensure_selector_for_tab(self, index: int) -> None:
         if 0 <= index < len(self._selector_modes):
@@ -150,7 +200,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
 
         seed = self._view_seed_colour
         widget = _build_selector_widget(mode, _model_for_colour(mode, seed), self)
-        widget.setObjectName(MODE_OBJECT_NAMES[mode])
+        widget.setObjectName(_mode_spec(mode).object_name)
         self._seed_selector(widget, seed)
         widget.previewed.connect(self._preview_colour)
         widget.committed.connect(self._commit_colour)
@@ -161,7 +211,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
             current_index = self._tabs.currentIndex()
             placeholder = self._tabs.widget(index)
             self._tabs.removeTab(index)
-            self._tabs.insertTab(index, widget, MODE_LABELS[mode])
+            self._tabs.insertTab(index, widget, _mode_spec(mode).label)
             if placeholder is not None:
                 placeholder.deleteLater()
             if current_index == index:
@@ -237,15 +287,7 @@ def _build_selector_widget(
     model: object,
     parent: QtWidgets.QWidget,
 ) -> SelectorWidget | QtWidgets.QWidget:
-    if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
-        from oklab_colour_picker.widgets.hue_lightness_slice_disk import HueLightnessSliceDiskWidget
-
-        return HueLightnessSliceDiskWidget(model, parent)
-    if mode == SelectorMode.LIGHTNESS_SLICE:
-        from oklab_colour_picker.widgets.lightness_slice_disk import LightnessSliceDiskWidget
-
-        return LightnessSliceDiskWidget(model, parent)
-    return SelectorWidget(model, parent)
+    return _mode_spec(mode).widget_factory(model, parent)
 
 
 def _model_for_colour(mode: SelectorMode, oklab: Sequence[float]) -> object:
@@ -253,13 +295,11 @@ def _model_for_colour(mode: SelectorMode, oklab: Sequence[float]) -> object:
     lightness = float(np.clip(lightness, 0.0, 1.0))
     chroma = max(0.0, float(chroma))
     hue = float(hue % math.tau)
-    if mode == SelectorMode.LIGHTNESS_SLICE:
-        return LightnessSliceModel(lightness=lightness)
-    if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
-        return HueLightnessSliceModel(chroma=chroma)
-    if mode == SelectorMode.LIGHTNESS_CHROMA_SLICE:
-        return LightnessChromaSliceModel(hue=hue)
-    raise AssertionError(f"unhandled selector mode: {mode!r}")
+    return _mode_spec(mode).model_factory(lightness, chroma, hue)
+
+
+def _mode_spec(mode: SelectorMode) -> ModeSpec:
+    return MODE_SPECS[mode]
 
 
 def _selected_or_default(oklab: Sequence[float] | None) -> np.ndarray:

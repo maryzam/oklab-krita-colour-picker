@@ -272,10 +272,11 @@ def test_selector_interaction_has_no_string_state_factory():
     assert "state_from_name" not in source
 
 
-def test_selector_interaction_dispatch_uses_handler_registry():
+def test_selector_interaction_dispatch_uses_command_objects():
     source = (ROOT / "oklab_colour_picker" / "selector_interaction.py").read_text()
 
-    assert "_COMMAND_HANDLERS" in source
+    assert "_COMMAND_HANDLERS" not in source
+    assert "command.dispatch(self._state, ctx)" in source
     assert "isinstance(command" not in source
 
 

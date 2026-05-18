@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Protocol
+from typing import ClassVar, Callable, Protocol
 
 
 Position = tuple[float, float]
@@ -35,69 +35,97 @@ class StateKind(str, Enum):
     PINNED = "PINNED"
 
 
-class PickKind(str, Enum):
-    EXACT = "exact"
-    SNAPPED = "snapped"
-    INVALID = "invalid"
+@dataclass(frozen=True, slots=True)
+class ExactPick:
+    colour: object
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class SnappedPick:
+    colour: object
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidPick:
+    pass
+
+
+Pick = ExactPick | SnappedPick | InvalidPick
+
+
 class PickResult:
-    kind: PickKind
-    colour: object | None = None
+    """Factory facade for illegal-state-free pick results."""
 
-    @classmethod
-    def exact(cls, colour: object) -> "PickResult":
-        return cls(PickKind.EXACT, colour)
+    @staticmethod
+    def exact(colour: object) -> Pick:
+        return ExactPick(colour)
 
-    @classmethod
-    def snapped(cls, colour: object) -> "PickResult":
-        return cls(PickKind.SNAPPED, colour)
+    @staticmethod
+    def snapped(colour: object) -> Pick:
+        return SnappedPick(colour)
 
-    @classmethod
-    def invalid(cls) -> "PickResult":
-        return cls(PickKind.INVALID)
+    @staticmethod
+    def invalid() -> Pick:
+        return InvalidPick()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PointerPress:
     point: Point
 
+    def dispatch(self, state: "State", ctx: "Ctx") -> "InteractionResult":
+        return state.press(ctx, self.point)
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class PointerMove:
     point: Point
 
+    def dispatch(self, state: "State", ctx: "Ctx") -> "InteractionResult":
+        return state.move(ctx, self.point)
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class PointerRelease:
     point: Point
 
+    def dispatch(self, state: "State", ctx: "Ctx") -> "InteractionResult":
+        return state.release(ctx, self.point)
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class Navigation:
     point: Point
     colour: object
 
+    def dispatch(self, state: "State", ctx: "Ctx") -> "InteractionResult":
+        return state.nav(ctx, self.point, self.colour)
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class KeyRelease:
-    pass
+    def dispatch(self, state: "State", ctx: "Ctx") -> "InteractionResult":
+        return state.key_release(ctx)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FocusOut:
-    pass
+    def dispatch(self, state: "State", ctx: "Ctx") -> "InteractionResult":
+        return state.focus_out(ctx)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Reframe:
-    pass
+    def dispatch(self, state: "State", ctx: "Ctx") -> "InteractionResult":
+        return state.reframe(ctx)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Broadcast:
     colour: object | None
+
+    def dispatch(self, state: "State", ctx: "Ctx") -> "InteractionResult":
+        return state.broadcast(ctx, self.colour)
 
 
 SelectorCommand = (
@@ -112,7 +140,7 @@ SelectorCommand = (
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Ring:
     """One indicator ring to stroke; ``solid`` picks solid vs. dashed."""
 
@@ -120,7 +148,7 @@ class Ring:
     solid: bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Indicator:
     """What the view should draw for the current state (empty == nothing)."""
 
@@ -143,13 +171,13 @@ class Ctx(Protocol):
     def set_colour(self, colour: object | None) -> None: ...
     def preview(self, colour: object | None) -> None: ...
     def commit(self, colour: object) -> None: ...
-    def pick(self, point: Point) -> PickResult: ...
+    def pick(self, point: Point) -> Pick: ...
     def quantized_equal(self, a: object | None, b: object | None) -> bool: ...
     def model_indicator(self) -> Indicator: ...
     def model_position(self) -> Position | None: ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class InteractionResult:
     state: "State"
     handled: bool = True
@@ -160,7 +188,7 @@ class State(ABC):
     """Base state. Every event defaults to a no-op self-transition, so each
     concrete state only overrides the events it actually handles."""
 
-    kind: StateKind
+    kind: ClassVar[StateKind]
 
     @property
     def name(self) -> str:
@@ -222,28 +250,26 @@ class _Anchored(State):
         return Indicator.at(self._anchor) if ctx.colour is not None else Indicator.nothing()
 
 
+@dataclass(frozen=True, slots=True)
 class Idle(State):
     """Rendering an externally pushed colour; no anchor (INV-1)."""
 
-    kind = StateKind.IDLE
+    kind: ClassVar[StateKind] = StateKind.IDLE
 
     def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
         ctx.set_colour(colour)
         return InteractionResult(self, rendered_broadcast=True)
 
 
+@dataclass(frozen=True, slots=True)
 class Dragging(_Anchored):
     """Pointer held; emitting previews. Owns the cancel target and the last
     in-gamut colour for the out-of-gamut release fallback (INV-6)."""
 
-    kind = StateKind.DRAGGING
-
-    def __init__(
-        self, anchor: Position, before: object | None, last_valid: object | None
-    ) -> None:
-        self._anchor = anchor
-        self._before = before
-        self._last_valid = last_valid
+    _anchor: Position
+    _before: object | None
+    _last_valid: object | None
+    kind: ClassVar[StateKind] = StateKind.DRAGGING
 
     def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
         return InteractionResult(self)
@@ -260,7 +286,7 @@ class Dragging(_Anchored):
         if colour is not None:
             ctx.set_colour(colour)
             ctx.commit(colour)
-            return InteractionResult(Pinned(colour, (float(point[0]), float(point[1]))))
+            return InteractionResult(Pinned(colour, _position(point)))
         if self._last_valid is not None:
             ctx.set_colour(self._last_valid)
             ctx.commit(self._last_valid)
@@ -276,7 +302,7 @@ class Dragging(_Anchored):
             ctx.set_colour(colour)
             ctx.preview(colour)
             return InteractionResult(
-                Dragging((float(point[0]), float(point[1])), self._before, colour)
+                Dragging(_position(point), self._before, colour)
             )
         if self._last_valid is not None:
             return InteractionResult(self)
@@ -285,13 +311,12 @@ class Dragging(_Anchored):
         return InteractionResult(Dragging(self._anchor, self._before, None))
 
 
+@dataclass(frozen=True, slots=True)
 class Keyboard(_Anchored):
     """Arrow/page navigation in flight; commit pending until key-up/blur."""
 
-    kind = StateKind.KEYBOARD
-
-    def __init__(self, anchor: Position) -> None:
-        self._anchor = anchor
+    _anchor: Position
+    kind: ClassVar[StateKind] = StateKind.KEYBOARD
 
     def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
         return InteractionResult(self)
@@ -299,7 +324,7 @@ class Keyboard(_Anchored):
     def nav(self, ctx: Ctx, point: Point, colour: object) -> InteractionResult:
         ctx.set_colour(colour)
         ctx.preview(colour)
-        return InteractionResult(Keyboard((float(point[0]), float(point[1]))))
+        return InteractionResult(Keyboard(_position(point)))
 
     def key_release(self, ctx: Ctx) -> InteractionResult:
         return self._flush(ctx)
@@ -315,15 +340,14 @@ class Keyboard(_Anchored):
         return InteractionResult(Pinned(colour, self._anchor))
 
 
+@dataclass(frozen=True, slots=True)
 class Pinned(_Anchored):
     """Post-commit: holds the committed colour at its pixel until something
     external supersedes it. The deliberate UX terminal state (§3.4)."""
 
-    kind = StateKind.PINNED
-
-    def __init__(self, colour: object, anchor: Position) -> None:
-        self._colour = colour
-        self._anchor = anchor
+    _colour: object | None
+    _anchor: Position
+    kind: ClassVar[StateKind] = StateKind.PINNED
 
     def broadcast(self, ctx: Ctx, colour: object | None) -> InteractionResult:
         if colour is not None and ctx.quantized_equal(colour, self._colour):
@@ -335,13 +359,13 @@ class Pinned(_Anchored):
 
 
 def _begin_drag(ctx: Ctx, point: Point) -> InteractionResult:
-    return Dragging((float(point[0]), float(point[1])), ctx.colour, None)._pick(ctx, point)
+    return Dragging(_position(point), ctx.colour, None)._pick(ctx, point)
 
 
 def _begin_keyboard(ctx: Ctx, point: Point, colour: object) -> InteractionResult:
     ctx.set_colour(colour)
     ctx.preview(colour)
-    return InteractionResult(Keyboard((float(point[0]), float(point[1]))))
+    return InteractionResult(Keyboard(_position(point)))
 
 
 class SelectorInteraction:
@@ -366,7 +390,7 @@ class SelectorInteraction:
         return tuple(kind.value for kind in self._transition_log)
 
     def dispatch(self, ctx: Ctx, command: SelectorCommand) -> InteractionResult:
-        result = self._handle(ctx, command)
+        result = command.dispatch(self._state, ctx)
         self._adopt(result.state)
         return result
 
@@ -393,33 +417,23 @@ class SelectorInteraction:
         state = factory(colour, anchor or (0.0, 0.0))
         self._adopt(state)
 
-    def _handle(self, ctx: Ctx, command: SelectorCommand) -> InteractionResult:
-        try:
-            handler = _COMMAND_HANDLERS[type(command)]
-        except KeyError as err:
-            raise TypeError(f"unknown selector command: {command!r}") from err
-        return handler(self._state, ctx, command)
-
     def _adopt(self, state: State) -> None:
         if state.kind is not self._state.kind:
             self._transition_log.append(state.kind)
         self._state = state
 
 
-def _drag_colour(picked: PickResult, *, has_last_valid: bool) -> object | None:
-    if picked.kind is PickKind.EXACT:
-        if picked.colour is None:
-            raise AssertionError("exact pick without a colour")
-        return picked.colour
-    if picked.kind is PickKind.SNAPPED and has_last_valid:
-        if picked.colour is None:
-            raise AssertionError("snapped pick without a colour")
-        return picked.colour
-    return None
+def _drag_colour(picked: Pick, *, has_last_valid: bool) -> object | None:
+    match picked:
+        case ExactPick(colour=colour):
+            return colour
+        case SnappedPick(colour=colour) if has_last_valid:
+            return colour
+        case InvalidPick() | SnappedPick():
+            return None
 
 
 StateFactory = Callable[[object | None, Position], State]
-CommandHandler = Callable[[State, Ctx, Any], InteractionResult]
 
 
 def _new_idle(_colour: object | None, _anchor: Position) -> State:
@@ -446,45 +460,5 @@ _STATE_FACTORIES: dict[StateKind, StateFactory] = {
 }
 
 
-def _handle_press(state: State, ctx: Ctx, command: PointerPress) -> InteractionResult:
-    return state.press(ctx, command.point)
-
-
-def _handle_move(state: State, ctx: Ctx, command: PointerMove) -> InteractionResult:
-    return state.move(ctx, command.point)
-
-
-def _handle_release(state: State, ctx: Ctx, command: PointerRelease) -> InteractionResult:
-    return state.release(ctx, command.point)
-
-
-def _handle_navigation(state: State, ctx: Ctx, command: Navigation) -> InteractionResult:
-    return state.nav(ctx, command.point, command.colour)
-
-
-def _handle_key_release(state: State, ctx: Ctx, _command: object) -> InteractionResult:
-    return state.key_release(ctx)
-
-
-def _handle_focus_out(state: State, ctx: Ctx, _command: object) -> InteractionResult:
-    return state.focus_out(ctx)
-
-
-def _handle_reframe(state: State, ctx: Ctx, _command: object) -> InteractionResult:
-    return state.reframe(ctx)
-
-
-def _handle_broadcast(state: State, ctx: Ctx, command: Broadcast) -> InteractionResult:
-    return state.broadcast(ctx, command.colour)
-
-
-_COMMAND_HANDLERS: dict[type[object], CommandHandler] = {
-    PointerPress: _handle_press,
-    PointerMove: _handle_move,
-    PointerRelease: _handle_release,
-    Navigation: _handle_navigation,
-    KeyRelease: _handle_key_release,
-    FocusOut: _handle_focus_out,
-    Reframe: _handle_reframe,
-    Broadcast: _handle_broadcast,
-}
+def _position(point: Point) -> Position:
+    return float(point[0]), float(point[1])

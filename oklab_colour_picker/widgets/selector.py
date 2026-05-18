@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import renderers, selector_interaction
 from oklab_colour_picker.controller import normalize_oklab_for_krita
-from oklab_colour_picker.selector_interaction import Indicator, PickResult, Ring, StateKind
+from oklab_colour_picker.selector_interaction import Indicator, Pick, PickResult, Ring, StateKind
 from oklab_colour_picker.selector_models import SelectorModel
 
 
@@ -73,16 +73,14 @@ class SelectorWidget(QtWidgets.QWidget):
             self._interaction.dispatch(self, selector_interaction.Reframe())
         )
 
-    def show_colour(self, oklab: Sequence[float] | None, kind: object | None = None) -> None:
+    def show_colour(self, oklab: Sequence[float] | None, _kind: object | None = None) -> None:
         """Absorb an inbound colour through the state machine (§3.2/§3.5).
 
         ``kind`` is informational only and never used to skip a view —
         absorption is decided locally by the state object (INV-3).
         """
 
-        self._apply_interaction(
-            self._interaction.dispatch(self, selector_interaction.Broadcast(_as_oklab(oklab)))
-        )
+        self._broadcast_colour(oklab)
 
     # Backwards-compatible alias used by programmatic/seed callers.
     set_selected_colour = show_colour
@@ -90,11 +88,17 @@ class SelectorWidget(QtWidgets.QWidget):
     def apply_broadcast(
         self,
         oklab: Sequence[float] | None,
-        kind: object,
-        model_factory,
+        model_factory: Callable[[], SelectorModel] | None,
     ) -> None:
         """Absorb a controller broadcast and adopt the model only if rendered."""
 
+        self._broadcast_colour(oklab, model_factory)
+
+    def _broadcast_colour(
+        self,
+        oklab: Sequence[float] | None,
+        model_factory: Callable[[], SelectorModel] | None = None,
+    ) -> None:
         result = self._interaction.dispatch(
             self, selector_interaction.Broadcast(_as_oklab(oklab))
         )
@@ -125,7 +129,7 @@ class SelectorWidget(QtWidgets.QWidget):
     def commit(self, colour: np.ndarray) -> None:
         self.committed.emit(np.asarray(colour, dtype=float).copy())
 
-    def pick(self, point: tuple[float, float]) -> PickResult:
+    def pick(self, point: tuple[float, float]) -> Pick:
         colour = self.color_at(point)
         if colour is not None:
             return PickResult.exact(colour)
@@ -272,26 +276,11 @@ class SelectorWidget(QtWidgets.QWidget):
         for ring in indicator.rings:
             self._stroke_circle(painter, ring.position, solid=ring.solid)
 
-    def _stroke_circle(
-        self, painter: QtGui.QPainter, position: tuple[float, float], *, solid: bool
-    ) -> None:
+    def _stroke_circle(self, painter: QtGui.QPainter, position: tuple[float, float], *, solid: bool) -> None:
         center = QtCore.QPointF(position[0], position[1])
-        if solid:
-            painter.setPen(QtGui.QPen(QtCore.Qt.black, 3.0))
+        for colour, width in ((QtCore.Qt.black, 3.0), (QtCore.Qt.white, 1.5)):
+            painter.setPen(_ring_pen(colour, width, solid=solid))
             painter.drawEllipse(center, 5.0, 5.0)
-            painter.setPen(QtGui.QPen(QtCore.Qt.white, 1.5))
-            painter.drawEllipse(center, 5.0, 5.0)
-            return
-        halo = QtGui.QPen(QtCore.Qt.black, 3.0)
-        halo.setStyle(QtCore.Qt.DashLine)
-        halo.setDashPattern([2.0, 2.0])
-        painter.setPen(halo)
-        painter.drawEllipse(center, 5.0, 5.0)
-        dash = QtGui.QPen(QtCore.Qt.white, 1.5)
-        dash.setStyle(QtCore.Qt.DashLine)
-        dash.setDashPattern([2.0, 2.0])
-        painter.setPen(dash)
-        painter.drawEllipse(center, 5.0, 5.0)
 
     def _selector_image(self) -> QtGui.QImage:
         key = (self._model, self.width(), self.height())
@@ -324,22 +313,18 @@ class SelectorWidget(QtWidgets.QWidget):
         x, y = position
         step = _keyboard_step(self.size(), event.modifiers())
         key = event.key()
-        if key == QtCore.Qt.Key_Left:
-            return self._nearest_valid_point(position, -step, 0.0)
-        if key == QtCore.Qt.Key_Right:
-            return self._nearest_valid_point(position, step, 0.0)
-        if key == QtCore.Qt.Key_Up:
-            return self._nearest_valid_point(position, 0.0, -step)
-        if key == QtCore.Qt.Key_Down:
-            return self._nearest_valid_point(position, 0.0, step)
-        if key == QtCore.Qt.Key_Home:
-            return self._nearest_valid_point(position, -x, 0.0)
-        if key == QtCore.Qt.Key_End:
-            return self._nearest_valid_point(position, self.width() - 1.0 - x, 0.0)
-        if key == QtCore.Qt.Key_PageUp:
-            return self._nearest_valid_point(position, 0.0, -y)
-        if key == QtCore.Qt.Key_PageDown:
-            return self._nearest_valid_point(position, 0.0, self.height() - 1.0 - y)
+        target_deltas = {
+            QtCore.Qt.Key_Left: (-step, 0.0),
+            QtCore.Qt.Key_Right: (step, 0.0),
+            QtCore.Qt.Key_Up: (0.0, -step),
+            QtCore.Qt.Key_Down: (0.0, step),
+            QtCore.Qt.Key_Home: (-x, 0.0),
+            QtCore.Qt.Key_End: (self.width() - 1.0 - x, 0.0),
+            QtCore.Qt.Key_PageUp: (0.0, -y),
+            QtCore.Qt.Key_PageDown: (0.0, self.height() - 1.0 - y),
+        }
+        if key in target_deltas:
+            return self._nearest_valid_point(position, *target_deltas[key])
         return None
 
     def _nearest_valid_point(
@@ -376,6 +361,14 @@ def _widget_size(widget: QtWidgets.QWidget) -> tuple[int, int]:
 
 def _point(event: QtGui.QMouseEvent) -> tuple[float, float]:
     return float(event.pos().x()), float(event.pos().y())
+
+
+def _ring_pen(colour: QtCore.Qt.GlobalColor, width: float, *, solid: bool) -> QtGui.QPen:
+    pen = QtGui.QPen(colour, width)
+    if not solid:
+        pen.setStyle(QtCore.Qt.DashLine)
+        pen.setDashPattern([2.0, 2.0])
+    return pen
 
 
 def _as_oklab(oklab: Sequence[float] | None) -> np.ndarray | None:
