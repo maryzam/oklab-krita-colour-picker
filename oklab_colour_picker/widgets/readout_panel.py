@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
+from enum import Enum
 from typing import Sequence
 
 import numpy as np
@@ -43,6 +45,22 @@ _CORNER_BUTTON_SIZE = 20
 # We floor the rendering chroma to keep the rail colourful while the OOG
 # checker continues to reflect the actual selected chroma.
 _H_TRACK_CHROMA_FLOOR = 0.06
+
+
+class _ReadoutState(Enum):
+    IDLE = "IDLE"
+    EDITING = "EDITING"
+
+
+class _EditExit(Enum):
+    COMMIT = "COMMIT"
+    CANCEL = "CANCEL"
+
+
+@dataclass(frozen=True)
+class _LatchedColour:
+    colour: np.ndarray
+    committed: bool
 
 
 def oklab_to_hex(oklab: Sequence[float]) -> str:
@@ -106,6 +124,8 @@ class _GradientSlider(QtWidgets.QSlider):
         self._track_buffer: np.ndarray | None = None
         self._track_cache_key: tuple | None = None
         self._fallback_colour: QtGui.QColor | None = None
+        self._pressed_handle = False
+        self._moved_since_press = False
 
     def set_track(self, rgba: np.ndarray) -> None:
         self._track_buffer = rgba
@@ -169,12 +189,7 @@ class _GradientSlider(QtWidgets.QSlider):
         painter.drawRect(track_rect)
 
         x = self._handle_x_center(track_rect)
-        handle_rect = QtCore.QRect(
-            x - _HANDLE_WIDTH // 2,
-            self.rect().top(),
-            _HANDLE_WIDTH,
-            self.rect().height() - 1,
-        )
+        handle_rect = self._handle_rect()
         ink = self._border_ink(x, track_rect)
         if self._fallback_colour is not None:
             # Fill inside the border so OOG handles show a solid sample of the
@@ -200,13 +215,17 @@ class _GradientSlider(QtWidgets.QSlider):
         # Use the full widget height as the hit target, matching native
         # sliders while still mapping horizontally through the visible track.
         self.setSliderDown(True)
-        self.setValue(self._value_at_x(event.x()))
+        self._pressed_handle = self._handle_rect().contains(event.pos())
+        self._moved_since_press = False
+        if not self._pressed_handle:
+            self.setValue(self._value_at_x(event.x()))
         event.accept()
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if not self.isSliderDown():
             super().mouseMoveEvent(event)
             return
+        self._moved_since_press = True
         self.setValue(self._value_at_x(event.x()))
         event.accept()
 
@@ -214,8 +233,11 @@ class _GradientSlider(QtWidgets.QSlider):
         if event.button() != QtCore.Qt.LeftButton or not self.isSliderDown():
             super().mouseReleaseEvent(event)
             return
-        self.setValue(self._value_at_x(event.x()))
+        if not (self._pressed_handle and not self._moved_since_press):
+            self.setValue(self._value_at_x(event.x()))
         self.setSliderDown(False)
+        self._pressed_handle = False
+        self._moved_since_press = False
         event.accept()
 
     def _value_at_x(self, x: int) -> int:
@@ -224,11 +246,23 @@ class _GradientSlider(QtWidgets.QSlider):
         fraction = float(np.clip(fraction, 0.0, 1.0))
         return self.minimum() + int(round(fraction * (self.maximum() - self.minimum())))
 
+    def _handle_rect(self) -> QtCore.QRect:
+        track_rect = self._track_rect()
+        x = self._handle_x_center(track_rect)
+        return QtCore.QRect(
+            x - _HANDLE_WIDTH // 2,
+            self.rect().top(),
+            _HANDLE_WIDTH,
+            self.rect().height() - 1,
+        )
+
 
 class _AxisRow(QtWidgets.QWidget):
     """One row: label, gradient slider, numeric spinbox."""
 
     valueChanged = QtCore.pyqtSignal(float, bool)  # (value, committed)
+    editStarted = QtCore.pyqtSignal()
+    editCancelled = QtCore.pyqtSignal()
 
     def __init__(
         self,
@@ -245,6 +279,8 @@ class _AxisRow(QtWidgets.QWidget):
         self._step = float(step)
         self._decimals = int(decimals)
         self._syncing = False
+        self._edit_start_value: float | None = None
+        self._edit_start_slider_value: int | None = None
 
         label_widget = QtWidgets.QLabel(label, self)
         label_widget.setFixedWidth(14)
@@ -268,7 +304,9 @@ class _AxisRow(QtWidgets.QWidget):
         layout.addWidget(self.spin, 0, QtCore.Qt.AlignVCenter)
 
         self.slider.valueChanged.connect(self._on_slider_changed)
+        self.slider.sliderPressed.connect(self._on_slider_pressed)
         self.slider.sliderReleased.connect(self._on_slider_released)
+        self.spin.installEventFilter(self)
         self.spin.editingFinished.connect(self._on_spin_committed)
         self.spin.valueChanged.connect(self._on_spin_value_changed)
 
@@ -297,6 +335,7 @@ class _AxisRow(QtWidgets.QWidget):
     def _on_slider_changed(self, position: int) -> None:
         if self._syncing:
             return
+        self._begin_edit()
         value = self._slider_to_value(position)
         self._syncing = True
         try:
@@ -306,12 +345,22 @@ class _AxisRow(QtWidgets.QWidget):
         committed = not self.slider.isSliderDown()
         self.valueChanged.emit(value, committed)
 
+    def _on_slider_pressed(self) -> None:
+        self._edit_start_slider_value = self.slider.value()
+        self._begin_edit()
+
     def _on_slider_released(self) -> None:
+        if self._edit_start_slider_value == self.slider.value():
+            self._cancel_edit()
+            return
         self.valueChanged.emit(self.value(), True)
+        self._edit_start_value = None
+        self._edit_start_slider_value = None
 
     def _on_spin_value_changed(self, value: float) -> None:
         if self._syncing:
             return
+        self._begin_edit()
         self._syncing = True
         try:
             self.slider.setValue(self._value_to_slider(value))
@@ -320,9 +369,41 @@ class _AxisRow(QtWidgets.QWidget):
         self.valueChanged.emit(value, False)
 
     def _on_spin_committed(self) -> None:
-        if self._syncing:
+        if self._syncing or self._edit_start_value is None:
+            return
+        self.spin.interpretText()
+        value = self.value()
+        if self._edit_start_value is not None and math.isclose(
+            value, self._edit_start_value, abs_tol=10 ** -self._decimals
+        ):
+            self._cancel_edit()
             return
         self.valueChanged.emit(self.value(), True)
+        self._edit_start_value = None
+
+    def _begin_edit(self) -> None:
+        if self._syncing:
+            return
+        if self._edit_start_value is None:
+            self._edit_start_value = self.value()
+            self.editStarted.emit()
+
+    def _cancel_edit(self) -> None:
+        self._edit_start_value = None
+        self._edit_start_slider_value = None
+        self.editCancelled.emit()
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        if obj is self.spin:
+            if event.type() == QtCore.QEvent.FocusIn:
+                self._begin_edit()
+            elif event.type() == QtCore.QEvent.KeyPress and event.key() == QtCore.Qt.Key_Escape:
+                if self._edit_start_value is not None:
+                    self.set_value(self._edit_start_value)
+                self._cancel_edit()
+                self.spin.clearFocus()
+                return True
+        return super().eventFilter(obj, event)
 
 
 class _UnifiedSwatch(QtWidgets.QWidget):
@@ -336,6 +417,8 @@ class _UnifiedSwatch(QtWidgets.QWidget):
     """
 
     hex_committed = QtCore.pyqtSignal(str)
+    edit_started = QtCore.pyqtSignal()
+    edit_cancelled = QtCore.pyqtSignal()
     revert_clicked = QtCore.pyqtSignal()
     _INK_STYLES: dict[str, tuple[str, str, str]] = {}
 
@@ -504,8 +587,11 @@ class _UnifiedSwatch(QtWidgets.QWidget):
         self._hex_edit.setReadOnly(False)
         self._hex_edit.setFocus(QtCore.Qt.MouseFocusReason)
         self._hex_edit.selectAll()
+        self.edit_started.emit()
 
     def _leave_edit_mode(self) -> None:
+        if not self._editing:
+            return
         self._editing = False
         self._hex_edit.setReadOnly(True)
         # Reset to the canonical text in case the user typed garbage.
@@ -514,6 +600,7 @@ class _UnifiedSwatch(QtWidgets.QWidget):
             self._hex_edit.setText(self._hex_text)
         finally:
             self._suppress_finish = False
+        self.edit_cancelled.emit()
 
     def _on_hex_finished(self) -> None:
         if self._suppress_finish or not self._editing:
@@ -522,6 +609,7 @@ class _UnifiedSwatch(QtWidgets.QWidget):
         self._editing = False
         self._hex_edit.setReadOnly(True)
         if text.strip().lower() == self._edit_start_hex.lower():
+            self.edit_cancelled.emit()
             return
         self.hex_committed.emit(text)
 
@@ -549,9 +637,12 @@ class ReadoutPanel(QtWidgets.QWidget):
         super().__init__(parent)
         self._current_oklab: np.ndarray | None = None
         self._previous_oklab: np.ndarray | None = None
-        self._syncing = False
+        self._state = _ReadoutState.IDLE
+        self._latched_colour: _LatchedColour | None = None
 
         self._swatch = _UnifiedSwatch(self)
+        self._swatch.edit_started.connect(self._begin_edit)
+        self._swatch.edit_cancelled.connect(self._cancel_edit)
         self._swatch.hex_committed.connect(self._on_hex_committed)
         self._swatch.revert_clicked.connect(self._on_previous_clicked)
 
@@ -562,11 +653,14 @@ class ReadoutPanel(QtWidgets.QWidget):
         self._row_l.valueChanged.connect(self._on_l_changed)
         self._row_c.valueChanged.connect(self._on_c_changed)
         self._row_h.valueChanged.connect(self._on_h_changed)
+        for row in (self._row_l, self._row_c, self._row_h):
+            row.editStarted.connect(self._begin_edit)
+            row.editCancelled.connect(self._cancel_edit)
 
         self._build_layout()
         # Initial slider tracks at a sensible default so the panel paints
         # something before the first colour arrives.
-        self.set_current_colour(np.array([0.5, 0.0, 0.0], dtype=float))
+        self.show_colour(np.array([0.5, 0.0, 0.0], dtype=float))
         self._previous_oklab = None
         self._swatch.set_revert_target(None)
 
@@ -582,8 +676,15 @@ class ReadoutPanel(QtWidgets.QWidget):
 
     # -- Public API ----------------------------------------------------
 
-    def set_current_colour(
-        self, oklab: Sequence[float] | None, *, committed: bool = True
+    @property
+    def readout_state(self) -> str:
+        return self._state.value
+
+    def show_colour(self, oklab: Sequence[float] | None, kind: object | None = None) -> None:
+        self._set_current_colour(oklab, committed=not _is_preview_kind(kind))
+
+    def _set_current_colour(
+        self, oklab: Sequence[float] | None, *, committed: bool
     ) -> None:
         """Update sliders, swatch, and hex without emitting signals.
 
@@ -594,15 +695,10 @@ class ReadoutPanel(QtWidgets.QWidget):
         if oklab is None:
             return
         colour = np.asarray(oklab, dtype=float).copy()
-        if (
-            committed
-            and self._current_oklab is not None
-            and not np.allclose(colour, self._current_oklab, atol=1e-6)
-        ):
-            self._previous_oklab = self._current_oklab.copy()
-            self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
-        self._current_oklab = colour
-        self._sync_widgets_to_colour(colour)
+        if self._state is _ReadoutState.EDITING:
+            self._latched_colour = _LatchedColour(colour=colour, committed=committed)
+            return
+        self._apply_colour(colour, committed=committed)
 
     def set_previous_colour(self, oklab: Sequence[float] | None) -> None:
         """Seed the revert target directly (e.g. from initial Krita FG)."""
@@ -615,19 +711,31 @@ class ReadoutPanel(QtWidgets.QWidget):
 
     # -- Internal sync -------------------------------------------------
 
+    def _apply_colour(self, colour: np.ndarray, *, committed: bool) -> None:
+        if (
+            committed
+            and self._current_oklab is not None
+            and not np.allclose(colour, self._current_oklab, atol=1e-6)
+        ):
+            self._previous_oklab = self._current_oklab.copy()
+            self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
+        self._current_oklab = colour
+        self._sync_widgets_to_colour(colour)
+
     def _sync_widgets_to_colour(self, oklab: np.ndarray) -> None:
-        self._syncing = True
-        try:
-            l, c, h = color_math.oklab_to_oklch(oklab)
-            self._row_l.set_value(float(l))
-            self._row_c.set_value(float(c))
-            self._row_h.set_value(math.degrees(float(h) % math.tau))
-            self._swatch.set_colour(oklab)
-            self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
-            self._refresh_tracks(float(l), float(c), float(h))
-            self._refresh_handle_fallback(oklab)
-        finally:
-            self._syncing = False
+        l, c, h = color_math.oklab_to_oklch(oklab)
+        self._row_l.set_value(float(l))
+        self._row_c.set_value(float(c))
+        self._row_h.set_value(math.degrees(float(h) % math.tau))
+        self._sync_readout_presentation(oklab, float(l), float(c), float(h))
+
+    def _sync_readout_presentation(
+        self, oklab: np.ndarray, lightness: float, chroma: float, hue: float
+    ) -> None:
+        self._swatch.set_colour(oklab)
+        self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
+        self._refresh_tracks(lightness, chroma, hue)
+        self._refresh_handle_fallback(oklab)
 
     def _refresh_handle_fallback(self, oklab: np.ndarray) -> None:
         srgb = color_math.clip_srgb(color_math.oklab_to_srgb(np.asarray(oklab, dtype=float)))
@@ -677,33 +785,25 @@ class ReadoutPanel(QtWidgets.QWidget):
     # -- Slot wiring ---------------------------------------------------
 
     def _current_lch(self) -> tuple[float, float, float]:
+        if self._state is _ReadoutState.EDITING:
+            return (
+                self._row_l.value(),
+                self._row_c.value(),
+                math.radians(self._row_h.value()) % math.tau,
+            )
         if self._current_oklab is None:
             return 0.5, 0.0, 0.0
         l, c, h = color_math.oklab_to_oklch(self._current_oklab)
         return float(l), float(c), float(h)
 
     def _emit_from_lch(self, lightness: float, chroma: float, hue_rad: float, committed: bool) -> None:
-        if self._syncing:
-            return
         oklab = color_math.oklch_to_oklab([lightness, chroma, hue_rad])
-        # Update internal state so the revert target tracks the last colour
-        # the user actually committed (not every intermediate preview).
         if committed:
-            if self._current_oklab is not None:
-                self._previous_oklab = self._current_oklab.copy()
-                self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
-            self._current_oklab = oklab.copy()
-        # Reflect the new colour in the swatch + hex + gamut indicator + the
-        # other two slider tracks immediately, without re-emitting.
-        self._syncing = True
-        try:
-            self._swatch.set_colour(oklab)
-            self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
-            self._refresh_tracks(lightness, chroma, hue_rad)
-            self._refresh_handle_fallback(oklab)
-        finally:
-            self._syncing = False
-        (self.committed if committed else self.previewed).emit(oklab)
+            self._finish_user_commit(oklab)
+            return
+        self._begin_edit()
+        self._sync_readout_presentation(oklab, lightness, chroma, hue_rad)
+        self.previewed.emit(oklab)
 
     def _on_l_changed(self, value: float, committed: bool) -> None:
         _, c, h = self._current_lch()
@@ -718,13 +818,12 @@ class ReadoutPanel(QtWidgets.QWidget):
         self._emit_from_lch(l, c, math.radians(value_degrees) % math.tau, committed)
 
     def _on_hex_committed(self, text: str) -> None:
-        if self._syncing:
-            return
         oklab = hex_to_oklab(text)
         if oklab is None:
             # Restore the swatch to the current colour on malformed input.
             if self._current_oklab is not None:
                 self._swatch.set_colour(self._current_oklab)
+            self._finish_edit(_EditExit.CANCEL)
             return
         l, c, h = color_math.oklab_to_oklch(oklab)
         self._emit_from_lch(float(l), float(c), float(h), True)
@@ -734,3 +833,32 @@ class ReadoutPanel(QtWidgets.QWidget):
             return
         l, c, h = color_math.oklab_to_oklch(self._previous_oklab)
         self._emit_from_lch(float(l), float(c), float(h), True)
+
+    def _begin_edit(self) -> None:
+        if self._state is _ReadoutState.EDITING:
+            return
+        self._state = _ReadoutState.EDITING
+        self._latched_colour = None
+
+    def _cancel_edit(self) -> None:
+        self._finish_edit(_EditExit.CANCEL)
+
+    def _finish_user_commit(self, oklab: np.ndarray) -> None:
+        self._finish_edit(_EditExit.COMMIT)
+        self._apply_colour(oklab.copy(), committed=True)
+        self.committed.emit(oklab)
+
+    def _finish_edit(self, exit_kind: _EditExit) -> None:
+        if self._state is _ReadoutState.IDLE:
+            return
+        latched = self._latched_colour
+        self._state = _ReadoutState.IDLE
+        self._latched_colour = None
+        if exit_kind is _EditExit.CANCEL and latched is not None:
+            self._apply_colour(latched.colour, committed=latched.committed)
+
+
+def _is_preview_kind(kind: object | None) -> bool:
+    # Avoid importing controller.ChangeKind in the widget layer; the controller
+    # broadcast contract exposes PREVIEW by enum name.
+    return getattr(kind, "name", None) == "PREVIEW"

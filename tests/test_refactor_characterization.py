@@ -268,7 +268,7 @@ def test_secondary_readout_slider_drag_previews_then_commits(qtbot):
     panel.resize(320, 200)
     qtbot.addWidget(panel)
     panel.show()
-    panel.set_current_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]))
+    panel.show_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]), ChangeKind.COMMIT)
     previews = []
     commits = []
     panel.previewed.connect(previews.append)
@@ -343,16 +343,15 @@ def test_edge_achromatic_echo_has_no_pinned_idle_pinned_transition(qtbot):
     assert widget.indicator_position() == pytest.approx((float(click.x()), float(click.y())))
 
 
-@pytest.mark.xfail(strict=True, reason="PR-3 / §3.6: ReadoutPanel edit latch is not implemented yet")
 def test_secondary_readout_external_change_during_edit_is_latched_until_cancel(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
     original = color_math.oklch_to_oklab([0.4, 0.05, 0.0])
     external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
-    panel.set_current_colour(original)
+    panel.show_colour(original, ChangeKind.COMMIT)
 
     panel._swatch._enter_edit_mode()
-    panel.set_current_colour(external)
+    panel.show_colour(external, ChangeKind.EXTERNAL)
 
     np.testing.assert_allclose(panel._current_oklab, original)
     escape = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Escape, QtCore.Qt.NoModifier)
