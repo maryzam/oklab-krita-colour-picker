@@ -55,8 +55,11 @@ ModelFactory = Callable[[float, float, float], object]
 CoordinateFactory = Callable[[float, float, float], "SliceCoordinate"]
 WidgetFactory = Callable[[object, QtWidgets.QWidget], SelectorWidget]
 
-KRITA_8BIT_COORDINATE_TOLERANCE = 1.0 / (255.0 ** 3)
-ACHROMATIC_CHROMA_TOLERANCE = KRITA_8BIT_COORDINATE_TOLERANCE
+# OKLab -> OKLCh recovery can jitter by a few ulps for fixed hue/chroma slices.
+# This epsilon is many orders below a visible slice step but large enough to
+# make same-slice cache hits deterministic across normal float round-trips.
+SLICE_COORDINATE_ROUNDTRIP_EPSILON = 1.0 / (255.0 ** 3)
+ACHROMATIC_CHROMA_TOLERANCE = 1.0e-8
 
 
 @dataclass(frozen=True)
@@ -92,7 +95,7 @@ class LinearSliceCoordinate:
                 self.value,
                 other.value,
                 rel_tol=0.0,
-                abs_tol=KRITA_8BIT_COORDINATE_TOLERANCE,
+                abs_tol=SLICE_COORDINATE_ROUNDTRIP_EPSILON,
             )
         )
 
@@ -105,7 +108,7 @@ class HueSliceCoordinate:
         return (
             isinstance(other, HueSliceCoordinate)
             and _circular_distance(self.radians, other.radians)
-            <= KRITA_8BIT_COORDINATE_TOLERANCE
+            <= SLICE_COORDINATE_ROUNDTRIP_EPSILON
         )
 
 
@@ -117,8 +120,8 @@ def _hue_lightness_slice_model(_lightness: float, chroma: float, _hue: float) ->
     return HueLightnessSliceModel(chroma=chroma)
 
 
-def _lightness_chroma_slice_model(_lightness: float, chroma: float, hue: float) -> object:
-    return LightnessChromaSliceModel(hue=_canonical_hue(chroma, hue))
+def _lightness_chroma_slice_model(_lightness: float, _chroma: float, hue: float) -> object:
+    return LightnessChromaSliceModel(hue=hue)
 
 
 def _lightness_coordinate(lightness: float, _chroma: float, _hue: float) -> SliceCoordinate:

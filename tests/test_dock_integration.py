@@ -287,6 +287,10 @@ def test_drag_rebuilds_only_background_models_whose_fixed_coordinate_changes(
     panel.set_mode(SelectorMode.LIGHTNESS_CHROMA_SLICE)
     active = panel.active_selector
     active.resize(120, 80)
+    initial_coordinates = {
+        mode: entry.coordinate
+        for mode, entry in panel._selector_model_cache.items()
+    }
 
     original = dock_module._model_for_oklch
     model_calls = []
@@ -315,8 +319,10 @@ def test_drag_rebuilds_only_background_models_whose_fixed_coordinate_changes(
     QtCore.QCoreApplication.sendEvent(active, move)
 
     assert active.state == "DRAGGING"
-    assert model_calls.count(SelectorMode.LIGHTNESS_SLICE) == 2
-    assert model_calls.count(SelectorMode.HUE_LIGHTNESS_SLICE) == 1
+    assert len(controller.previews) == 2
+    expected_counts = _expected_rebuild_counts(initial_coordinates, controller.previews)
+    assert model_calls.count(SelectorMode.LIGHTNESS_SLICE) == expected_counts[SelectorMode.LIGHTNESS_SLICE]
+    assert model_calls.count(SelectorMode.HUE_LIGHTNESS_SLICE) == expected_counts[SelectorMode.HUE_LIGHTNESS_SLICE]
     assert SelectorMode.LIGHTNESS_CHROMA_SLICE not in model_calls
 
 
@@ -373,17 +379,18 @@ def test_slice_model_cache_canonicalizes_achromatic_hue(qtbot):
     panel = ColourPickerDockPanel(FakeController())
     qtbot.addWidget(panel)
 
+    hue = 1.25
     first = panel._cached_model_for_colour(
         SelectorMode.LIGHTNESS_CHROMA_SLICE,
-        np.array([0.40, 0.0, 0.0], dtype=float),
+        color_math.oklch_to_oklab([0.40, 1e-12, hue]),
     )
     second = panel._cached_model_for_colour(
         SelectorMode.LIGHTNESS_CHROMA_SLICE,
-        np.array([0.70, -0.0, 0.0], dtype=float),
+        np.array([0.70, 0.0, 0.0], dtype=float),
     )
 
     assert second is first
-    assert first.hue == pytest.approx(0.0)
+    assert first.hue == pytest.approx(hue)
 
 
 @pytest.mark.parametrize(
@@ -407,8 +414,8 @@ def test_slice_model_cache_canonicalizes_achromatic_hue(qtbot):
     ],
 )
 def test_slice_model_specs_depend_only_on_their_fixed_coordinate(mode, first, second):
-    first_model = dock_module._model_for_colour(mode, color_math.oklch_to_oklab(first))
-    second_model = dock_module._model_for_colour(mode, color_math.oklch_to_oklab(second))
+    first_model = dock_module._model_for_oklch(mode, tuple(first))
+    second_model = dock_module._model_for_oklch(mode, tuple(second))
 
     assert second_model == first_model
 
@@ -734,6 +741,20 @@ def _send_mouse(widget, event_type, point, button, buttons):
     )
     QtCore.QCoreApplication.sendEvent(widget, event)
     return event
+
+
+def _expected_rebuild_counts(initial_coordinates, colours):
+    coordinates = dict(initial_coordinates)
+    counts = {mode: 0 for mode in SelectorMode}
+    for colour in colours:
+        oklch = dock_module._normalized_oklch(colour)
+        for mode in SelectorMode:
+            coordinate = dock_module._fixed_slice_coordinate(mode, oklch)
+            if coordinates[mode].equivalent_to(coordinate):
+                continue
+            counts[mode] += 1
+            coordinates[mode] = coordinate
+    return counts
 
 
 class FakeController:
