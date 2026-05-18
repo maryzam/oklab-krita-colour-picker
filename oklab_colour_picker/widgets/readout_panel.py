@@ -124,6 +124,8 @@ class _GradientSlider(QtWidgets.QSlider):
         self._track_buffer: np.ndarray | None = None
         self._track_cache_key: tuple | None = None
         self._fallback_colour: QtGui.QColor | None = None
+        self._pressed_handle = False
+        self._moved_since_press = False
 
     def set_track(self, rgba: np.ndarray) -> None:
         self._track_buffer = rgba
@@ -187,12 +189,7 @@ class _GradientSlider(QtWidgets.QSlider):
         painter.drawRect(track_rect)
 
         x = self._handle_x_center(track_rect)
-        handle_rect = QtCore.QRect(
-            x - _HANDLE_WIDTH // 2,
-            self.rect().top(),
-            _HANDLE_WIDTH,
-            self.rect().height() - 1,
-        )
+        handle_rect = self._handle_rect()
         ink = self._border_ink(x, track_rect)
         if self._fallback_colour is not None:
             # Fill inside the border so OOG handles show a solid sample of the
@@ -218,13 +215,17 @@ class _GradientSlider(QtWidgets.QSlider):
         # Use the full widget height as the hit target, matching native
         # sliders while still mapping horizontally through the visible track.
         self.setSliderDown(True)
-        self.setValue(self._value_at_x(event.x()))
+        self._pressed_handle = self._handle_rect().contains(event.pos())
+        self._moved_since_press = False
+        if not self._pressed_handle:
+            self.setValue(self._value_at_x(event.x()))
         event.accept()
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if not self.isSliderDown():
             super().mouseMoveEvent(event)
             return
+        self._moved_since_press = True
         self.setValue(self._value_at_x(event.x()))
         event.accept()
 
@@ -232,8 +233,11 @@ class _GradientSlider(QtWidgets.QSlider):
         if event.button() != QtCore.Qt.LeftButton or not self.isSliderDown():
             super().mouseReleaseEvent(event)
             return
-        self.setValue(self._value_at_x(event.x()))
+        if not (self._pressed_handle and not self._moved_since_press):
+            self.setValue(self._value_at_x(event.x()))
         self.setSliderDown(False)
+        self._pressed_handle = False
+        self._moved_since_press = False
         event.accept()
 
     def _value_at_x(self, x: int) -> int:
@@ -242,11 +246,23 @@ class _GradientSlider(QtWidgets.QSlider):
         fraction = float(np.clip(fraction, 0.0, 1.0))
         return self.minimum() + int(round(fraction * (self.maximum() - self.minimum())))
 
+    def _handle_rect(self) -> QtCore.QRect:
+        track_rect = self._track_rect()
+        x = self._handle_x_center(track_rect)
+        return QtCore.QRect(
+            x - _HANDLE_WIDTH // 2,
+            self.rect().top(),
+            _HANDLE_WIDTH,
+            self.rect().height() - 1,
+        )
+
 
 class _AxisRow(QtWidgets.QWidget):
     """One row: label, gradient slider, numeric spinbox."""
 
     valueChanged = QtCore.pyqtSignal(float, bool)  # (value, committed)
+    editStarted = QtCore.pyqtSignal()
+    editCancelled = QtCore.pyqtSignal()
 
     def __init__(
         self,
@@ -263,6 +279,8 @@ class _AxisRow(QtWidgets.QWidget):
         self._step = float(step)
         self._decimals = int(decimals)
         self._syncing = False
+        self._edit_start_value: float | None = None
+        self._edit_start_slider_value: int | None = None
 
         label_widget = QtWidgets.QLabel(label, self)
         label_widget.setFixedWidth(14)
@@ -286,7 +304,9 @@ class _AxisRow(QtWidgets.QWidget):
         layout.addWidget(self.spin, 0, QtCore.Qt.AlignVCenter)
 
         self.slider.valueChanged.connect(self._on_slider_changed)
+        self.slider.sliderPressed.connect(self._on_slider_pressed)
         self.slider.sliderReleased.connect(self._on_slider_released)
+        self.spin.installEventFilter(self)
         self.spin.editingFinished.connect(self._on_spin_committed)
         self.spin.valueChanged.connect(self._on_spin_value_changed)
 
@@ -315,6 +335,7 @@ class _AxisRow(QtWidgets.QWidget):
     def _on_slider_changed(self, position: int) -> None:
         if self._syncing:
             return
+        self._begin_edit()
         value = self._slider_to_value(position)
         self._syncing = True
         try:
@@ -324,12 +345,22 @@ class _AxisRow(QtWidgets.QWidget):
         committed = not self.slider.isSliderDown()
         self.valueChanged.emit(value, committed)
 
+    def _on_slider_pressed(self) -> None:
+        self._edit_start_slider_value = self.slider.value()
+        self._begin_edit()
+
     def _on_slider_released(self) -> None:
+        if self._edit_start_slider_value == self.slider.value():
+            self._cancel_edit()
+            return
         self.valueChanged.emit(self.value(), True)
+        self._edit_start_value = None
+        self._edit_start_slider_value = None
 
     def _on_spin_value_changed(self, value: float) -> None:
         if self._syncing:
             return
+        self._begin_edit()
         self._syncing = True
         try:
             self.slider.setValue(self._value_to_slider(value))
@@ -340,7 +371,39 @@ class _AxisRow(QtWidgets.QWidget):
     def _on_spin_committed(self) -> None:
         if self._syncing:
             return
+        self.spin.interpretText()
+        value = self.value()
+        if self._edit_start_value is not None and math.isclose(
+            value, self._edit_start_value, abs_tol=10 ** -self._decimals
+        ):
+            self._cancel_edit()
+            return
         self.valueChanged.emit(self.value(), True)
+        self._edit_start_value = None
+
+    def _begin_edit(self) -> None:
+        if self._syncing:
+            return
+        if self._edit_start_value is None:
+            self._edit_start_value = self.value()
+            self.editStarted.emit()
+
+    def _cancel_edit(self) -> None:
+        self._edit_start_value = None
+        self._edit_start_slider_value = None
+        self.editCancelled.emit()
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        if obj is self.spin:
+            if event.type() == QtCore.QEvent.FocusIn:
+                self._begin_edit()
+            elif event.type() == QtCore.QEvent.KeyPress and event.key() == QtCore.Qt.Key_Escape:
+                if self._edit_start_value is not None:
+                    self.set_value(self._edit_start_value)
+                self._cancel_edit()
+                self.spin.clearFocus()
+                return True
+        return super().eventFilter(obj, event)
 
 
 class _UnifiedSwatch(QtWidgets.QWidget):
@@ -590,11 +653,14 @@ class ReadoutPanel(QtWidgets.QWidget):
         self._row_l.valueChanged.connect(self._on_l_changed)
         self._row_c.valueChanged.connect(self._on_c_changed)
         self._row_h.valueChanged.connect(self._on_h_changed)
+        for row in (self._row_l, self._row_c, self._row_h):
+            row.editStarted.connect(self._begin_edit)
+            row.editCancelled.connect(self._cancel_edit)
 
         self._build_layout()
         # Initial slider tracks at a sensible default so the panel paints
         # something before the first colour arrives.
-        self.set_current_colour(np.array([0.5, 0.0, 0.0], dtype=float))
+        self.show_colour(np.array([0.5, 0.0, 0.0], dtype=float), _INITIAL_KIND)
         self._previous_oklab = None
         self._swatch.set_revert_target(None)
 
@@ -615,10 +681,10 @@ class ReadoutPanel(QtWidgets.QWidget):
         return self._state.value
 
     def show_colour(self, oklab: Sequence[float] | None, kind: object | None = None) -> None:
-        self.set_current_colour(oklab, committed=not _is_preview_kind(kind))
+        self._set_current_colour(oklab, committed=not _is_preview_kind(kind))
 
-    def set_current_colour(
-        self, oklab: Sequence[float] | None, *, committed: bool = True
+    def _set_current_colour(
+        self, oklab: Sequence[float] | None, *, committed: bool
     ) -> None:
         """Update sliders, swatch, and hex without emitting signals.
 
@@ -793,4 +859,13 @@ class ReadoutPanel(QtWidgets.QWidget):
 
 
 def _is_preview_kind(kind: object | None) -> bool:
-    return getattr(kind, "name", None) == "PREVIEW" or getattr(kind, "value", None) == "preview"
+    # Avoid importing controller.ChangeKind in the widget layer; the controller
+    # broadcast contract exposes PREVIEW by enum name.
+    return getattr(kind, "name", None) == "PREVIEW"
+
+
+class _InitialKind:
+    name = "INITIAL"
+
+
+_INITIAL_KIND = _InitialKind()

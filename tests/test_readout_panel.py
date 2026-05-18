@@ -114,7 +114,7 @@ def test_readout_panel_round_trips_through_sliders(qtbot):
     panel.resize(320, 200)
 
     target = color_math.oklch_to_oklab([0.62, 0.11, math.radians(245.0)])
-    panel.set_current_colour(target)
+    panel.show_colour(target, ChangeKind.COMMIT)
 
     assert panel._row_l.value() == pytest.approx(0.62, abs=1e-3)
     assert panel._row_c.value() == pytest.approx(0.11, abs=1e-3)
@@ -123,12 +123,12 @@ def test_readout_panel_round_trips_through_sliders(qtbot):
 
 def test_readout_panel_slider_edit_updates_handle_fallback(qtbot):
     # Direct slider interaction goes through _emit_from_lch, not
-    # set_current_colour. The handle fallback colour must still update so the
+    # show_colour. The handle fallback colour must still update so the
     # OOG handle fill stays in sync with the colour the panel just emitted.
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
     panel.resize(320, 200)
-    panel.set_current_colour(color_math.oklch_to_oklab([0.5, 0.05, 0.0]))
+    panel.show_colour(color_math.oklch_to_oklab([0.5, 0.05, 0.0]), ChangeKind.COMMIT)
 
     panel._row_h.valueChanged.emit(180.0, True)
 
@@ -147,7 +147,7 @@ def test_readout_slider_click_jumps_to_clicked_position(qtbot):
     panel.show()
     qtbot.waitExposed(panel)
 
-    panel.set_current_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]))
+    panel.show_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]), ChangeKind.COMMIT)
     commits: list[np.ndarray] = []
     previews: list[np.ndarray] = []
     panel.previewed.connect(lambda colour: previews.append(np.asarray(colour, dtype=float)))
@@ -173,7 +173,7 @@ def test_readout_slider_drag_previews_and_commits_release_position(qtbot):
     panel.show()
     qtbot.waitExposed(panel)
 
-    panel.set_current_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]))
+    panel.show_colour(color_math.oklch_to_oklab([0.2, 0.05, 0.0]), ChangeKind.COMMIT)
     commits: list[np.ndarray] = []
     previews: list[np.ndarray] = []
     panel.previewed.connect(lambda colour: previews.append(np.asarray(colour, dtype=float)))
@@ -202,7 +202,7 @@ def test_readout_panel_hex_field_reflects_current_colour(qtbot):
     qtbot.addWidget(panel)
 
     oklab = color_math.srgb_to_oklab(np.array([0x4A, 0x8F, 0xB2]) / 255.0)
-    panel.set_current_colour(oklab)
+    panel.show_colour(oklab, ChangeKind.COMMIT)
 
     assert panel._swatch.hex_text == "#4a8fb2"
 
@@ -210,7 +210,7 @@ def test_readout_panel_hex_field_reflects_current_colour(qtbot):
 def test_readout_panel_hex_edit_emits_committed_colour(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
-    panel.set_current_colour(color_math.srgb_to_oklab(np.array([0.5, 0.5, 0.5])))
+    panel.show_colour(color_math.srgb_to_oklab(np.array([0.5, 0.5, 0.5])), ChangeKind.COMMIT)
 
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
@@ -225,7 +225,7 @@ def test_readout_panel_hex_edit_emits_committed_colour(qtbot):
 def test_readout_panel_hex_edit_mode_commits_via_lineedit(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
-    panel.set_current_colour(color_math.srgb_to_oklab(np.array([0.5, 0.5, 0.5])))
+    panel.show_colour(color_math.srgb_to_oklab(np.array([0.5, 0.5, 0.5])), ChangeKind.COMMIT)
 
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
@@ -247,8 +247,8 @@ def test_readout_panel_revert_button_restores_previous(qtbot):
 
     first = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
     second = color_math.srgb_to_oklab(np.array([0.7, 0.3, 0.1]))
-    panel.set_current_colour(first)
-    panel.set_current_colour(second)
+    panel.show_colour(first, ChangeKind.COMMIT)
+    panel.show_colour(second, ChangeKind.COMMIT)
 
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
@@ -265,7 +265,7 @@ def test_readout_panel_set_previous_seeds_revert_target(qtbot):
     qtbot.addWidget(panel)
 
     seed = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
-    panel.set_current_colour(seed)
+    panel.show_colour(seed, ChangeKind.COMMIT)
     panel.set_previous_colour(seed)
 
     received: list[np.ndarray] = []
@@ -283,11 +283,11 @@ def test_readout_panel_preview_does_not_advance_previous(qtbot):
     qtbot.addWidget(panel)
 
     first = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
-    panel.set_current_colour(first, committed=True)
+    panel.show_colour(first, ChangeKind.COMMIT)
     snapshot = panel._previous_oklab.copy() if panel._previous_oklab is not None else None
 
     preview = color_math.srgb_to_oklab(np.array([0.7, 0.3, 0.1]))
-    panel.set_current_colour(preview, committed=False)
+    panel.show_colour(preview, ChangeKind.PREVIEW)
 
     if snapshot is None:
         assert panel._previous_oklab is None
@@ -302,8 +302,8 @@ def test_readout_panel_committed_updates_advance_previous(qtbot):
 
     a = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
     b = color_math.srgb_to_oklab(np.array([0.7, 0.3, 0.1]))
-    panel.set_current_colour(a, committed=True)
-    panel.set_current_colour(b, committed=True)
+    panel.show_colour(a, ChangeKind.COMMIT)
+    panel.show_colour(b, ChangeKind.COMMIT)
 
     np.testing.assert_allclose(panel._previous_oklab, a, atol=1e-12)
     np.testing.assert_allclose(panel._current_oklab, b, atol=1e-12)
@@ -314,7 +314,7 @@ def test_readout_panel_hex_enter_sets_previous_only_once(qtbot):
     qtbot.addWidget(panel)
 
     a = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
-    panel.set_current_colour(a, committed=True)
+    panel.show_colour(a, ChangeKind.COMMIT)
 
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
@@ -331,8 +331,8 @@ def test_readout_panel_hex_focus_out_without_edit_does_not_commit(qtbot):
 
     a = color_math.srgb_to_oklab(np.array([0.2, 0.4, 0.6]))
     b = color_math.srgb_to_oklab(np.array([0.7, 0.3, 0.1]))
-    panel.set_current_colour(a, committed=True)
-    panel.set_current_colour(b, committed=True)
+    panel.show_colour(a, ChangeKind.COMMIT)
+    panel.show_colour(b, ChangeKind.COMMIT)
     previous = panel._previous_oklab.copy()
 
     received: list[np.ndarray] = []
@@ -352,7 +352,7 @@ def test_readout_panel_latches_external_colour_during_hex_edit_until_cancel(qtbo
     original = color_math.oklch_to_oklab([0.4, 0.05, 0.0])
     external_a = color_math.oklch_to_oklab([0.7, 0.03, 1.0])
     external_b = color_math.oklch_to_oklab([0.8, 0.02, 2.0])
-    panel.set_current_colour(original)
+    panel.show_colour(original, ChangeKind.COMMIT)
 
     panel._swatch._enter_edit_mode()
     panel.show_colour(external_a, ChangeKind.EXTERNAL)
@@ -376,7 +376,7 @@ def test_readout_panel_commit_discards_latched_external_colour(qtbot):
     original = color_math.oklch_to_oklab([0.4, 0.05, 0.0])
     external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
     committed = color_math.srgb_to_oklab(np.array([0x4A, 0x8F, 0xB2]) / 255.0)
-    panel.set_current_colour(original)
+    panel.show_colour(original, ChangeKind.COMMIT)
 
     received: list[np.ndarray] = []
     panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
@@ -400,7 +400,7 @@ def test_readout_panel_slider_commit_discards_latched_external_colour(qtbot):
     qtbot.waitExposed(panel)
     original = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
     external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
-    panel.set_current_colour(original)
+    panel.show_colour(original, ChangeKind.COMMIT)
 
     slider = panel._row_l.slider
     track = slider._track_rect()
@@ -417,6 +417,71 @@ def test_readout_panel_slider_commit_discards_latched_external_colour(qtbot):
     assert panel.readout_state == "IDLE"
     committed_lightness, _, _ = color_math.oklab_to_oklch(panel._current_oklab)
     assert committed_lightness == pytest.approx(0.75, abs=0.02)
+
+
+def test_readout_panel_spinbox_typing_latches_external_without_clobbering_text(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+    original = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
+    external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
+    panel.show_colour(original, ChangeKind.COMMIT)
+
+    spin = panel._row_l.spin
+    _send_focus(spin, QtCore.QEvent.FocusIn)
+    spin.lineEdit().selectAll()
+    spin.lineEdit().setText("0.750")
+    panel.show_colour(external, ChangeKind.EXTERNAL)
+
+    assert panel.readout_state == "EDITING"
+    assert spin.lineEdit().text() == "0.750"
+    np.testing.assert_allclose(panel._current_oklab, original, atol=1e-12)
+
+    spin.editingFinished.emit()
+
+    assert panel.readout_state == "IDLE"
+    committed_lightness, _, _ = color_math.oklab_to_oklch(panel._current_oklab)
+    assert committed_lightness == pytest.approx(0.75, abs=1e-3)
+
+
+def test_readout_panel_spinbox_cancel_applies_latched_external_colour(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+    original = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
+    external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
+    panel.show_colour(original, ChangeKind.COMMIT)
+
+    spin = panel._row_l.spin
+    _send_focus(spin, QtCore.QEvent.FocusIn)
+    panel.show_colour(external, ChangeKind.EXTERNAL)
+    spin.editingFinished.emit()
+
+    assert panel.readout_state == "IDLE"
+    np.testing.assert_allclose(panel._current_oklab, external, atol=1e-12)
+
+
+def test_readout_panel_zero_delta_slider_press_applies_latched_external_on_release(qtbot):
+    panel = ReadoutPanel()
+    panel.resize(320, 200)
+    qtbot.addWidget(panel)
+    panel.show()
+    qtbot.waitExposed(panel)
+    original = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
+    external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
+    panel.show_colour(original, ChangeKind.COMMIT)
+
+    slider = panel._row_l.slider
+    track = slider._track_rect()
+    target = QtCore.QPoint(slider._handle_x_center(track), track.center().y())
+    _send_mouse(slider, QtCore.QEvent.MouseButtonPress, target)
+
+    assert panel.readout_state == "EDITING"
+    panel.show_colour(external, ChangeKind.EXTERNAL)
+    np.testing.assert_allclose(panel._current_oklab, original, atol=1e-12)
+
+    _send_mouse(slider, QtCore.QEvent.MouseButtonRelease, target)
+
+    assert panel.readout_state == "IDLE"
+    np.testing.assert_allclose(panel._current_oklab, external, atol=1e-12)
 
 
 def test_readout_panel_show_colour_is_idempotent_while_idle_and_editing(qtbot):
@@ -483,11 +548,12 @@ def test_readout_panel_out_of_gamut_warning_visibility(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)
 
-    panel.set_current_colour(color_math.srgb_to_oklab(np.array([0.5, 0.5, 0.5])))
+    panel.show_colour(color_math.srgb_to_oklab(np.array([0.5, 0.5, 0.5])), ChangeKind.COMMIT)
     assert not panel._swatch._oog_visible
 
-    panel.set_current_colour(
-        color_math.oklch_to_oklab([0.6, color_math.SRGB_MAX_CHROMA, 0.0])
+    panel.show_colour(
+        color_math.oklch_to_oklab([0.6, color_math.SRGB_MAX_CHROMA, 0.0]),
+        ChangeKind.COMMIT,
     )
     assert panel._swatch._oog_visible
 
@@ -504,6 +570,11 @@ def _send_mouse(widget, event_type, position):
     )
     QtWidgets.QApplication.sendEvent(widget, event)
     assert event.isAccepted()
+
+
+def _send_focus(widget, event_type):
+    event = QtGui.QFocusEvent(event_type, QtCore.Qt.OtherFocusReason)
+    QtWidgets.QApplication.sendEvent(widget, event)
 
 
 def test_axis_track_hue_chroma_floor_lifts_neutral_colors():
