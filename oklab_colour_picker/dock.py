@@ -176,9 +176,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
             widget.apply_broadcast(
                 colour, self._selector_model_factory(mode, colour)
             )
-        self._readout_panel.set_current_colour(
-            colour, committed=kind is not ChangeKind.PREVIEW
-        )
+        self._readout_panel.show_colour(colour, kind)
 
     def _build_selector_tabs(self) -> None:
         for mode in self._selector_modes:
@@ -235,7 +233,7 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         widget.show_colour(colour, ChangeKind.INITIAL)
 
     def _seed_readout_panel(self, colour: np.ndarray) -> None:
-        self._readout_panel.set_current_colour(colour)
+        self._readout_panel.show_colour(colour, ChangeKind.INITIAL)
         self._readout_panel.set_previous_colour(colour)
 
     def _preview_colour(self, oklab: Sequence[float] | None) -> None:

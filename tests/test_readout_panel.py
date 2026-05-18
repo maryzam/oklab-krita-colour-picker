@@ -10,6 +10,7 @@ pytest.importorskip("PyQt5")
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+from oklab_colour_picker.controller import ChangeKind
 from oklab_colour_picker import color_math, renderers
 from oklab_colour_picker.widgets.readout_panel import (
     ReadoutPanel,
@@ -343,6 +344,113 @@ def test_readout_panel_hex_focus_out_without_edit_does_not_commit(qtbot):
     assert received == []
     np.testing.assert_allclose(panel._previous_oklab, previous, atol=1e-12)
     np.testing.assert_allclose(panel._current_oklab, b, atol=1e-12)
+
+
+def test_readout_panel_latches_external_colour_during_hex_edit_until_cancel(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+    original = color_math.oklch_to_oklab([0.4, 0.05, 0.0])
+    external_a = color_math.oklch_to_oklab([0.7, 0.03, 1.0])
+    external_b = color_math.oklch_to_oklab([0.8, 0.02, 2.0])
+    panel.set_current_colour(original)
+
+    panel._swatch._enter_edit_mode()
+    panel.show_colour(external_a, ChangeKind.EXTERNAL)
+    panel.show_colour(external_b, ChangeKind.PREVIEW)
+
+    assert panel.readout_state == "EDITING"
+    np.testing.assert_allclose(panel._current_oklab, original, atol=1e-12)
+    assert panel._swatch.hex_text == oklab_to_hex(original)
+
+    escape = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Escape, QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(panel._swatch._hex_edit, escape)
+
+    assert panel.readout_state == "IDLE"
+    np.testing.assert_allclose(panel._current_oklab, external_b, atol=1e-12)
+    assert panel._swatch.hex_text == oklab_to_hex(external_b)
+
+
+def test_readout_panel_commit_discards_latched_external_colour(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+    original = color_math.oklch_to_oklab([0.4, 0.05, 0.0])
+    external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
+    committed = color_math.srgb_to_oklab(np.array([0x4A, 0x8F, 0xB2]) / 255.0)
+    panel.set_current_colour(original)
+
+    received: list[np.ndarray] = []
+    panel.committed.connect(lambda colour: received.append(np.asarray(colour, dtype=float)))
+
+    panel._swatch._enter_edit_mode()
+    panel.show_colour(external, ChangeKind.EXTERNAL)
+    panel._swatch._hex_edit.setText("#4a8fb2")
+    panel._swatch._hex_edit.editingFinished.emit()
+
+    assert panel.readout_state == "IDLE"
+    assert len(received) == 1
+    np.testing.assert_allclose(received[0], committed, atol=1e-4)
+    np.testing.assert_allclose(panel._current_oklab, committed, atol=1e-4)
+
+
+def test_readout_panel_slider_commit_discards_latched_external_colour(qtbot):
+    panel = ReadoutPanel()
+    panel.resize(320, 200)
+    qtbot.addWidget(panel)
+    panel.show()
+    qtbot.waitExposed(panel)
+    original = color_math.oklch_to_oklab([0.2, 0.05, 0.0])
+    external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
+    panel.set_current_colour(original)
+
+    slider = panel._row_l.slider
+    track = slider._track_rect()
+    start = QtCore.QPoint(track.left() + int(round(track.width() * 0.25)), track.center().y())
+    end = QtCore.QPoint(track.left() + int(round(track.width() * 0.75)), track.center().y())
+    _send_mouse(slider, QtCore.QEvent.MouseButtonPress, start)
+
+    assert panel.readout_state == "EDITING"
+    panel.show_colour(external, ChangeKind.EXTERNAL)
+    np.testing.assert_allclose(panel._current_oklab, original, atol=1e-12)
+
+    _send_mouse(slider, QtCore.QEvent.MouseButtonRelease, end)
+
+    assert panel.readout_state == "IDLE"
+    committed_lightness, _, _ = color_math.oklab_to_oklch(panel._current_oklab)
+    assert committed_lightness == pytest.approx(0.75, abs=0.02)
+
+
+def test_readout_panel_show_colour_is_idempotent_while_idle_and_editing(qtbot):
+    panel = ReadoutPanel()
+    qtbot.addWidget(panel)
+    original = color_math.oklch_to_oklab([0.4, 0.05, 0.0])
+    external = color_math.oklch_to_oklab([0.8, 0.02, 1.0])
+    panel.show_colour(original, ChangeKind.INITIAL)
+    idle_snapshot = (
+        panel.readout_state,
+        panel._swatch.hex_text,
+        None if panel._current_oklab is None else panel._current_oklab.copy(),
+        None if panel._previous_oklab is None else panel._previous_oklab.copy(),
+    )
+
+    panel.show_colour(original, ChangeKind.INITIAL)
+
+    assert panel.readout_state == idle_snapshot[0]
+    assert panel._swatch.hex_text == idle_snapshot[1]
+    np.testing.assert_allclose(panel._current_oklab, idle_snapshot[2], atol=1e-12)
+    np.testing.assert_allclose(panel._previous_oklab, idle_snapshot[3], atol=1e-12)
+
+    panel._swatch._enter_edit_mode()
+    panel.show_colour(external, ChangeKind.EXTERNAL)
+    editing_snapshot = (
+        panel.readout_state,
+        panel._swatch.hex_text,
+        panel._current_oklab.copy(),
+    )
+    panel.show_colour(external, ChangeKind.EXTERNAL)
+
+    assert panel.readout_state == editing_snapshot[0]
+    assert panel._swatch.hex_text == editing_snapshot[1]
+    np.testing.assert_allclose(panel._current_oklab, editing_snapshot[2], atol=1e-12)
 
 
 def test_unified_swatch_skips_stylesheet_reassignment_when_ink_is_unchanged(qtbot, monkeypatch):

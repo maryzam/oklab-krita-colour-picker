@@ -343,7 +343,6 @@ def test_edge_achromatic_echo_has_no_pinned_idle_pinned_transition(qtbot):
     assert widget.indicator_position() == pytest.approx((float(click.x()), float(click.y())))
 
 
-@pytest.mark.xfail(strict=True, reason="PR-3 / §3.6: ReadoutPanel edit latch is not implemented yet")
 def test_secondary_readout_external_change_during_edit_is_latched_until_cancel(qtbot):
     panel = ReadoutPanel()
     qtbot.addWidget(panel)

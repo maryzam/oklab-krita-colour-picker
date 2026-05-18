@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
+from enum import Enum
 from typing import Sequence
 
 import numpy as np
@@ -43,6 +45,22 @@ _CORNER_BUTTON_SIZE = 20
 # We floor the rendering chroma to keep the rail colourful while the OOG
 # checker continues to reflect the actual selected chroma.
 _H_TRACK_CHROMA_FLOOR = 0.06
+
+
+class _ReadoutState(Enum):
+    IDLE = "IDLE"
+    EDITING = "EDITING"
+
+
+class _EditExit(Enum):
+    COMMIT = "COMMIT"
+    CANCEL = "CANCEL"
+
+
+@dataclass(frozen=True)
+class _LatchedColour:
+    colour: np.ndarray
+    committed: bool
 
 
 def oklab_to_hex(oklab: Sequence[float]) -> str:
@@ -336,6 +354,8 @@ class _UnifiedSwatch(QtWidgets.QWidget):
     """
 
     hex_committed = QtCore.pyqtSignal(str)
+    edit_started = QtCore.pyqtSignal()
+    edit_cancelled = QtCore.pyqtSignal()
     revert_clicked = QtCore.pyqtSignal()
     _INK_STYLES: dict[str, tuple[str, str, str]] = {}
 
@@ -504,8 +524,11 @@ class _UnifiedSwatch(QtWidgets.QWidget):
         self._hex_edit.setReadOnly(False)
         self._hex_edit.setFocus(QtCore.Qt.MouseFocusReason)
         self._hex_edit.selectAll()
+        self.edit_started.emit()
 
     def _leave_edit_mode(self) -> None:
+        if not self._editing:
+            return
         self._editing = False
         self._hex_edit.setReadOnly(True)
         # Reset to the canonical text in case the user typed garbage.
@@ -514,6 +537,7 @@ class _UnifiedSwatch(QtWidgets.QWidget):
             self._hex_edit.setText(self._hex_text)
         finally:
             self._suppress_finish = False
+        self.edit_cancelled.emit()
 
     def _on_hex_finished(self) -> None:
         if self._suppress_finish or not self._editing:
@@ -522,6 +546,7 @@ class _UnifiedSwatch(QtWidgets.QWidget):
         self._editing = False
         self._hex_edit.setReadOnly(True)
         if text.strip().lower() == self._edit_start_hex.lower():
+            self.edit_cancelled.emit()
             return
         self.hex_committed.emit(text)
 
@@ -549,9 +574,12 @@ class ReadoutPanel(QtWidgets.QWidget):
         super().__init__(parent)
         self._current_oklab: np.ndarray | None = None
         self._previous_oklab: np.ndarray | None = None
-        self._syncing = False
+        self._state = _ReadoutState.IDLE
+        self._latched_colour: _LatchedColour | None = None
 
         self._swatch = _UnifiedSwatch(self)
+        self._swatch.edit_started.connect(self._begin_edit)
+        self._swatch.edit_cancelled.connect(self._cancel_edit)
         self._swatch.hex_committed.connect(self._on_hex_committed)
         self._swatch.revert_clicked.connect(self._on_previous_clicked)
 
@@ -582,6 +610,13 @@ class ReadoutPanel(QtWidgets.QWidget):
 
     # -- Public API ----------------------------------------------------
 
+    @property
+    def readout_state(self) -> str:
+        return self._state.value
+
+    def show_colour(self, oklab: Sequence[float] | None, kind: object | None = None) -> None:
+        self.set_current_colour(oklab, committed=not _is_preview_kind(kind))
+
     def set_current_colour(
         self, oklab: Sequence[float] | None, *, committed: bool = True
     ) -> None:
@@ -594,15 +629,10 @@ class ReadoutPanel(QtWidgets.QWidget):
         if oklab is None:
             return
         colour = np.asarray(oklab, dtype=float).copy()
-        if (
-            committed
-            and self._current_oklab is not None
-            and not np.allclose(colour, self._current_oklab, atol=1e-6)
-        ):
-            self._previous_oklab = self._current_oklab.copy()
-            self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
-        self._current_oklab = colour
-        self._sync_widgets_to_colour(colour)
+        if self._state is _ReadoutState.EDITING:
+            self._latched_colour = _LatchedColour(colour=colour, committed=committed)
+            return
+        self._apply_colour(colour, committed=committed)
 
     def set_previous_colour(self, oklab: Sequence[float] | None) -> None:
         """Seed the revert target directly (e.g. from initial Krita FG)."""
@@ -615,19 +645,31 @@ class ReadoutPanel(QtWidgets.QWidget):
 
     # -- Internal sync -------------------------------------------------
 
+    def _apply_colour(self, colour: np.ndarray, *, committed: bool) -> None:
+        if (
+            committed
+            and self._current_oklab is not None
+            and not np.allclose(colour, self._current_oklab, atol=1e-6)
+        ):
+            self._previous_oklab = self._current_oklab.copy()
+            self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
+        self._current_oklab = colour
+        self._sync_widgets_to_colour(colour)
+
     def _sync_widgets_to_colour(self, oklab: np.ndarray) -> None:
-        self._syncing = True
-        try:
-            l, c, h = color_math.oklab_to_oklch(oklab)
-            self._row_l.set_value(float(l))
-            self._row_c.set_value(float(c))
-            self._row_h.set_value(math.degrees(float(h) % math.tau))
-            self._swatch.set_colour(oklab)
-            self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
-            self._refresh_tracks(float(l), float(c), float(h))
-            self._refresh_handle_fallback(oklab)
-        finally:
-            self._syncing = False
+        l, c, h = color_math.oklab_to_oklch(oklab)
+        self._row_l.set_value(float(l))
+        self._row_c.set_value(float(c))
+        self._row_h.set_value(math.degrees(float(h) % math.tau))
+        self._sync_readout_presentation(oklab, float(l), float(c), float(h))
+
+    def _sync_readout_presentation(
+        self, oklab: np.ndarray, lightness: float, chroma: float, hue: float
+    ) -> None:
+        self._swatch.set_colour(oklab)
+        self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
+        self._refresh_tracks(lightness, chroma, hue)
+        self._refresh_handle_fallback(oklab)
 
     def _refresh_handle_fallback(self, oklab: np.ndarray) -> None:
         srgb = color_math.clip_srgb(color_math.oklab_to_srgb(np.asarray(oklab, dtype=float)))
@@ -677,33 +719,25 @@ class ReadoutPanel(QtWidgets.QWidget):
     # -- Slot wiring ---------------------------------------------------
 
     def _current_lch(self) -> tuple[float, float, float]:
+        if self._state is _ReadoutState.EDITING:
+            return (
+                self._row_l.value(),
+                self._row_c.value(),
+                math.radians(self._row_h.value()) % math.tau,
+            )
         if self._current_oklab is None:
             return 0.5, 0.0, 0.0
         l, c, h = color_math.oklab_to_oklch(self._current_oklab)
         return float(l), float(c), float(h)
 
     def _emit_from_lch(self, lightness: float, chroma: float, hue_rad: float, committed: bool) -> None:
-        if self._syncing:
-            return
         oklab = color_math.oklch_to_oklab([lightness, chroma, hue_rad])
-        # Update internal state so the revert target tracks the last colour
-        # the user actually committed (not every intermediate preview).
         if committed:
-            if self._current_oklab is not None:
-                self._previous_oklab = self._current_oklab.copy()
-                self._swatch.set_revert_target(oklab_to_hex(self._previous_oklab))
-            self._current_oklab = oklab.copy()
-        # Reflect the new colour in the swatch + hex + gamut indicator + the
-        # other two slider tracks immediately, without re-emitting.
-        self._syncing = True
-        try:
-            self._swatch.set_colour(oklab)
-            self._swatch.set_oog_visible(not is_in_srgb_gamut(oklab))
-            self._refresh_tracks(lightness, chroma, hue_rad)
-            self._refresh_handle_fallback(oklab)
-        finally:
-            self._syncing = False
-        (self.committed if committed else self.previewed).emit(oklab)
+            self._finish_user_commit(oklab)
+            return
+        self._begin_edit()
+        self._sync_readout_presentation(oklab, lightness, chroma, hue_rad)
+        self.previewed.emit(oklab)
 
     def _on_l_changed(self, value: float, committed: bool) -> None:
         _, c, h = self._current_lch()
@@ -718,13 +752,12 @@ class ReadoutPanel(QtWidgets.QWidget):
         self._emit_from_lch(l, c, math.radians(value_degrees) % math.tau, committed)
 
     def _on_hex_committed(self, text: str) -> None:
-        if self._syncing:
-            return
         oklab = hex_to_oklab(text)
         if oklab is None:
             # Restore the swatch to the current colour on malformed input.
             if self._current_oklab is not None:
                 self._swatch.set_colour(self._current_oklab)
+            self._finish_edit(_EditExit.CANCEL)
             return
         l, c, h = color_math.oklab_to_oklch(oklab)
         self._emit_from_lch(float(l), float(c), float(h), True)
@@ -734,3 +767,30 @@ class ReadoutPanel(QtWidgets.QWidget):
             return
         l, c, h = color_math.oklab_to_oklch(self._previous_oklab)
         self._emit_from_lch(float(l), float(c), float(h), True)
+
+    def _begin_edit(self) -> None:
+        if self._state is _ReadoutState.EDITING:
+            return
+        self._state = _ReadoutState.EDITING
+        self._latched_colour = None
+
+    def _cancel_edit(self) -> None:
+        self._finish_edit(_EditExit.CANCEL)
+
+    def _finish_user_commit(self, oklab: np.ndarray) -> None:
+        self._finish_edit(_EditExit.COMMIT)
+        self._apply_colour(oklab.copy(), committed=True)
+        self.committed.emit(oklab)
+
+    def _finish_edit(self, exit_kind: _EditExit) -> None:
+        if self._state is _ReadoutState.IDLE:
+            return
+        latched = self._latched_colour
+        self._state = _ReadoutState.IDLE
+        self._latched_colour = None
+        if exit_kind is _EditExit.CANCEL and latched is not None:
+            self._apply_colour(latched.colour, committed=latched.committed)
+
+
+def _is_preview_kind(kind: object | None) -> bool:
+    return getattr(kind, "name", None) == "PREVIEW" or getattr(kind, "value", None) == "preview"
