@@ -129,7 +129,7 @@ controller.colour_changed(colour: np.ndarray, kind: ChangeKind)
 | `request_foreground_commit` → flush success | yes | `COMMIT` | after successful adapter write; carries the normalized committed colour |
 | flush failure / rollback | yes | `ROLLBACK` | carries the restored pre-commit colour |
 | `sync_external_foreground` (Krita-originated) | yes | `EXTERNAL` | the only kind that may force a `PINNED` view to `IDLE` |
-| initial startup foreground pull | yes | `INITIAL` | replay seed for views created before/after (see §2.5) |
+| `add_colour_listener` (subscribe) | yes, to the new listener only | `INITIAL` | replay of `selected_colour`; the startup pull in `__init__` runs before any listener exists, so INITIAL is delivered at subscribe time as the seed for views created before/after (see §2.5) |
 | self-feedback / no-op (token+quantized match) | **no** | — | suppressed exactly as today (`_is_self_feedback`) |
 
 `kind` is informational for views that need it (`COMMIT` updates ReadoutPanel's
@@ -147,6 +147,14 @@ new tabs without re-reading the controller; it is write-only from the broadcast
 path, never read by any commit/preview logic, and is not a fifth source of
 truth. Slice-model construction from the seed colour is covered by §5 slice 2,
 not slice 4 (see review #5).
+
+**Slice-model rebuild policy (decided in slice 2).** The dock builds the
+per-mode slice model from each broadcast colour for every `kind`, but a view
+that is mid-gesture (`DRAGGING`/`KEYBOARD`) is skipped entirely — neither its
+model nor its colour is touched until the gesture releases (§3.5). This is a
+uniform rule for all views, not a source tag. Slice 4 only adds caching so the
+rebuild is skipped when the fixed slice coordinate is unchanged; it does not
+change this policy.
 
 ### 2.2 Layer boundaries (unchanged hard rules, restated)
 
@@ -181,6 +189,16 @@ geometry collapses to one helper reused by widgets and
 The widget is *already* a state machine smeared across `_pressed`,
 `_keyboard_commit_pending`, `_colour_before_drag`, `_last_valid_drag_colour`,
 `_last_interaction_position`. We make it explicit.
+
+The Qt widget talks to the machine through a small **interaction facade**. The
+widget dispatches typed commands (`PointerPress`, `PointerMove`,
+`PointerRelease`, `Navigation`, `Broadcast`, `Reframe`, etc.) and receives a
+typed result (`handled`, `rendered_broadcast`). It never branches on string
+state names. The dock supplies per-mode selector models through a factory; the
+factory is invoked only when the interaction result says the broadcast was
+rendered. Picking is a strategy result (`EXACT`, `SNAPPED`, `INVALID`) so the
+drag state owns fallback decisions instead of exposing `last_valid` or other
+state-owned data through the widget adapter.
 
 ### 3.1 States
 
@@ -235,6 +253,9 @@ discarded on exit.
 - **INV-6 — out-of-gamut continuity.** During `DRAGGING`, leaving the gamut leaf
   snaps via `model.snapped_color_at_position`; the preview stays continuous and
   `last_valid` tracks the last in-gamut colour for release fallback.
+- **INV-7 — no state-name dispatch outside the machine.** Downstream code
+  reacts to typed interaction outcomes, never `state == "DRAGGING"` /
+  `"PINNED"` string probes. State names are only a debug/test observation.
 
 ### 3.4 PINNED — the deliberate UX decision
 
@@ -394,7 +415,7 @@ behaviour change beyond its row. Branch per slice (e.g. `rewrite/02-echo-kill`).
 | 0a | **Done — handover doc on merge** | Guardrail characterization | Enforce lower-layer structure claims: hard-rule import/write/pixel checks, lower-layer no UI-layer imports, direct coverage-module checks, and strict xfails for the PR-1 §2.3 model contract. | Suite green; xfails enumerated and linked to PR-1 §2.3 |
 | 0b | **Done — handover doc on merge** | Behaviour characterization | Add §4.2–4.4 acceptance tests against *current* behaviour where it matches intent; mark known-bad with xfail referencing the invariant they will satisfy post-refactor. Add `hypothesis` dep + §4.5 properties (xfail allowed). | Suite green; xfails enumerated and linked to INV-/edge IDs |
 | 1 | In review | Honest model contract | `SelectorModel` ABC + defaults; split selector-model implementations under `oklab_colour_picker/models/` behind the stable `selector_models.py` facade; delete all `getattr` probes and disk `_snapped_colour_at` override; unify disk geometry helper. | No behaviour change; model tests + import-discipline green; model package covered by pure/lower-layer guardrails |
-| 2 | Pending | Echo kill + state machine | Introduce explicit state machine in `SelectorWidget` (§3); controller change contract §2.4 (rename listener API, emit `colour_changed`/`kind`); dock dumb broadcaster + lazy-tab seeding §2.5; `IndicatorSpec` model contract §2.3; delete `_last_interaction_position` family. **Decide here:** who builds the per-mode slice model from a broadcast colour and on which `kind` (the *policy*); slice 4 only optimizes its caching. Flip Phase-0 xfails for INV-1..INV-4 and chroma=0. | All §4 core/secondary/edge + INV-1..INV-6; achromatic + OOG dual-ring regression green; transition+state coverage met |
+| 2 | In review | Echo kill + state machine | Introduce explicit state machine in `SelectorWidget` (§3); controller change contract §2.4 (rename listener API, emit `colour_changed`/`kind`); dock dumb broadcaster + lazy-tab seeding §2.5; `IndicatorSpec` model contract §2.3; delete `_last_interaction_position` family. **Decide here:** who builds the per-mode slice model from a broadcast colour and on which `kind` (the *policy*); slice 4 only optimizes its caching. Flip Phase-0 xfails for INV-1..INV-4 and chroma=0. | All §4 core/secondary/edge + INV-1..INV-6; achromatic + OOG dual-ring regression green; transition+state coverage met |
 | 3 | Pending | ReadoutPanel unification | Two-state machine; drop `_syncing`; latch/exit policy §3.6; same one-way contract. | ReadoutPanel flows §4.3 incl. external-change-during-edit; P2 holds for panel |
 | 4 | Pending | Slice-model rebuild optimization | Keep slice-2 rebuild *policy*; add caching so a mode's slice model is reconstructed only when its fixed slice coordinate actually changes, not per preview tick. | Perf tests stable; no model rebuild during a drag (counter assertion) |
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Protocol, Sequence
 
@@ -10,6 +11,7 @@ import numpy as np
 from PyQt5 import QtWidgets
 
 from oklab_colour_picker import color_math
+from oklab_colour_picker.controller import ChangeKind
 from oklab_colour_picker.selector_models import (
     HueLightnessSliceModel,
     LightnessChromaSliceModel,
@@ -19,7 +21,7 @@ from oklab_colour_picker.widgets.readout_panel import ReadoutPanel
 from oklab_colour_picker.widgets.selector import SelectorWidget
 
 
-ForegroundListener = Callable[[Sequence[float]], None]
+ColourListener = Callable[[np.ndarray, ChangeKind], None]
 
 
 class DockController(Protocol):
@@ -36,10 +38,10 @@ class DockController(Protocol):
     def set_dock_visible(self, visible: bool) -> None:
         ...
 
-    def add_foreground_listener(self, listener: ForegroundListener) -> None:
+    def add_colour_listener(self, listener: ColourListener) -> None:
         ...
 
-    def remove_foreground_listener(self, listener: ForegroundListener) -> None:
+    def remove_colour_listener(self, listener: ColourListener) -> None:
         ...
 
 
@@ -49,16 +51,65 @@ class SelectorMode(str, Enum):
     LIGHTNESS_CHROMA_SLICE = "lightness_chroma_slice"
 
 
-MODE_LABELS = {
-    SelectorMode.LIGHTNESS_SLICE: "Hue/Chroma",
-    SelectorMode.HUE_LIGHTNESS_SLICE: "Hue/Lightness",
-    SelectorMode.LIGHTNESS_CHROMA_SLICE: "Lightness/Chroma",
-}
+ModelFactory = Callable[[float, float, float], object]
+WidgetFactory = Callable[[object, QtWidgets.QWidget], SelectorWidget]
 
-MODE_OBJECT_NAMES = {
-    SelectorMode.LIGHTNESS_SLICE: "lightness-slice-selector",
-    SelectorMode.HUE_LIGHTNESS_SLICE: "hue-lightness-slice-selector",
-    SelectorMode.LIGHTNESS_CHROMA_SLICE: "lightness-chroma-slice-selector",
+
+@dataclass(frozen=True)
+class ModeSpec:
+    label: str
+    object_name: str
+    model_factory: ModelFactory
+    widget_factory: WidgetFactory
+
+
+def _lightness_slice_model(lightness: float, _chroma: float, _hue: float) -> object:
+    return LightnessSliceModel(lightness=lightness)
+
+
+def _hue_lightness_slice_model(_lightness: float, chroma: float, _hue: float) -> object:
+    return HueLightnessSliceModel(chroma=chroma)
+
+
+def _lightness_chroma_slice_model(_lightness: float, _chroma: float, hue: float) -> object:
+    return LightnessChromaSliceModel(hue=hue)
+
+
+def _selector_widget(model: object, parent: QtWidgets.QWidget) -> SelectorWidget:
+    return SelectorWidget(model, parent)
+
+
+def _lightness_slice_widget(model: object, parent: QtWidgets.QWidget) -> SelectorWidget:
+    from oklab_colour_picker.widgets.lightness_slice_disk import LightnessSliceDiskWidget
+
+    return LightnessSliceDiskWidget(model, parent)
+
+
+def _hue_lightness_slice_widget(model: object, parent: QtWidgets.QWidget) -> SelectorWidget:
+    from oklab_colour_picker.widgets.hue_lightness_slice_disk import HueLightnessSliceDiskWidget
+
+    return HueLightnessSliceDiskWidget(model, parent)
+
+
+MODE_SPECS = {
+    SelectorMode.LIGHTNESS_SLICE: ModeSpec(
+        "Hue/Chroma",
+        "lightness-slice-selector",
+        _lightness_slice_model,
+        _lightness_slice_widget,
+    ),
+    SelectorMode.HUE_LIGHTNESS_SLICE: ModeSpec(
+        "Hue/Lightness",
+        "hue-lightness-slice-selector",
+        _hue_lightness_slice_model,
+        _hue_lightness_slice_widget,
+    ),
+    SelectorMode.LIGHTNESS_CHROMA_SLICE: ModeSpec(
+        "Lightness/Chroma",
+        "lightness-chroma-slice-selector",
+        _lightness_chroma_slice_model,
+        _selector_widget,
+    ),
 }
 
 DEFAULT_COLOUR = np.array([0.5, 0.0, 0.0], dtype=float)
@@ -70,23 +121,19 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
     def __init__(self, controller: DockController, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._controller = controller
-        self._selected_colour = _selected_or_default(controller.selected_colour)
-        self._selector_modes = tuple(SelectorMode)
+        self._view_seed_colour = _selected_or_default(controller.selected_colour)
+        self._selector_modes = tuple(MODE_SPECS)
         self._tabs = QtWidgets.QTabWidget(self)
         self._selectors: dict[SelectorMode, QtWidgets.QWidget] = {}
         self._readout_panel = ReadoutPanel(self)
         self._readout_panel.previewed.connect(self._preview_colour)
         self._readout_panel.committed.connect(self._commit_colour)
-        self._foreground_listener = self.set_selected_colour
         self._build_selector_tabs()
         self._build_layout()
         self._tabs.currentChanged.connect(self._ensure_selector_for_tab)
-        self._readout_panel.set_current_colour(self._selected_colour)
-        # Seed previous swatch with the initial foreground so the first
-        # display has a meaningful revert target (current == previous).
-        self._readout_panel.set_previous_colour(self._selected_colour)
-        self._controller.add_foreground_listener(self._foreground_listener)
-        self.destroyed.connect(self._remove_foreground_listener)
+        self._seed_readout_panel(self._view_seed_colour)
+        self._controller_subscription = ColourSubscription(controller, self._on_colour_changed)
+        self.destroyed.connect(self._controller_subscription.disconnect)
 
     @property
     def selector_widgets(self) -> tuple[SelectorWidget, ...]:
@@ -116,15 +163,21 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
     ) -> None:
         if oklab is None:
             return
+        self._show_on_views(
+            _as_oklab(oklab), ChangeKind.COMMIT if committed else ChangeKind.PREVIEW
+        )
 
-        self._selected_colour = _as_oklab(oklab)
+    def _on_colour_changed(self, oklab: Sequence[float], kind: ChangeKind) -> None:
+        self._show_on_views(_as_oklab(oklab), kind)
+
+    def _show_on_views(self, colour: np.ndarray, kind: ChangeKind) -> None:
+        self._view_seed_colour = colour
         for mode, widget in self._selectors.items():
-            model = _model_for_colour(mode, self._selected_colour)
-            if widget.model != model:
-                widget.set_model(model)
-            widget.set_selected_colour(self._selected_colour)
+            widget.apply_broadcast(
+                colour, self._selector_model_factory(mode, colour)
+            )
         self._readout_panel.set_current_colour(
-            self._selected_colour, committed=committed
+            colour, committed=kind is not ChangeKind.PREVIEW
         )
 
     def _build_selector_tabs(self) -> None:
@@ -133,8 +186,8 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
                 widget = self._ensure_selector(mode)
             else:
                 widget = QtWidgets.QWidget(self)
-                widget.setObjectName(f"{MODE_OBJECT_NAMES[mode]}-placeholder")
-            self._tabs.addTab(widget, MODE_LABELS[mode])
+                widget.setObjectName(f"{_mode_spec(mode).object_name}-placeholder")
+            self._tabs.addTab(widget, _mode_spec(mode).label)
 
     def _ensure_selector_for_tab(self, index: int) -> None:
         if 0 <= index < len(self._selector_modes):
@@ -145,9 +198,10 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         if existing is not None:
             return existing
 
-        widget = _build_selector_widget(mode, _model_for_colour(mode, self._selected_colour), self)
-        widget.setObjectName(MODE_OBJECT_NAMES[mode])
-        widget.set_selected_colour(self._selected_colour)
+        seed = self._view_seed_colour
+        widget = _build_selector_widget(mode, _model_for_colour(mode, seed), self)
+        widget.setObjectName(_mode_spec(mode).object_name)
+        self._seed_selector(widget, seed)
         widget.previewed.connect(self._preview_colour)
         widget.committed.connect(self._commit_colour)
         self._selectors[mode] = widget
@@ -156,10 +210,8 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         if index < self._tabs.count():
             current_index = self._tabs.currentIndex()
             placeholder = self._tabs.widget(index)
-            # Replacing the placeholder may re-emit currentChanged; the
-            # existing-widget early return above keeps that re-entry harmless.
             self._tabs.removeTab(index)
-            self._tabs.insertTab(index, widget, MODE_LABELS[mode])
+            self._tabs.insertTab(index, widget, _mode_spec(mode).label)
             if placeholder is not None:
                 placeholder.deleteLater()
             if current_index == index:
@@ -176,26 +228,42 @@ class ColourPickerDockPanel(QtWidgets.QWidget):
         layout.addWidget(self._tabs)
         layout.addWidget(self._readout_panel)
 
+    def _selector_model_factory(self, mode: SelectorMode, colour: np.ndarray) -> Callable[[], object]:
+        return lambda: _model_for_colour(mode, colour)
+
+    def _seed_selector(self, widget: SelectorWidget, colour: np.ndarray) -> None:
+        widget.show_colour(colour, ChangeKind.INITIAL)
+
+    def _seed_readout_panel(self, colour: np.ndarray) -> None:
+        self._readout_panel.set_current_colour(colour)
+        self._readout_panel.set_previous_colour(colour)
+
     def _preview_colour(self, oklab: Sequence[float] | None) -> None:
-        if oklab is not None:
-            self.set_selected_colour(oklab, committed=False)
         self._controller.set_preview_colour(oklab)
 
     def _commit_colour(self, oklab: Sequence[float] | None) -> None:
-        if oklab is not None:
-            self.set_selected_colour(oklab, committed=True)
         self._controller.request_foreground_commit(oklab)
-
-    def _remove_foreground_listener(self) -> None:
-        try:
-            self._controller.remove_foreground_listener(self._foreground_listener)
-        except (AttributeError, ValueError, RuntimeError):
-            pass
-
 
 def connect_dock_visibility(dock_widget, controller: DockController) -> "VisibilityConnection":
     dock_widget.visibilityChanged.connect(controller.set_dock_visible)
     return VisibilityConnection(dock_widget.visibilityChanged, controller.set_dock_visible)
+
+
+class ColourSubscription:
+    def __init__(self, controller: DockController, listener: ColourListener) -> None:
+        self._controller = controller
+        self._listener = listener
+        self._connected = True
+        self._controller.add_colour_listener(self._listener)
+
+    def disconnect(self, *_args) -> None:
+        if not self._connected:
+            return
+        try:
+            self._controller.remove_colour_listener(self._listener)
+        except (AttributeError, ValueError, RuntimeError):
+            pass
+        self._connected = False
 
 
 class VisibilityConnection:
@@ -219,15 +287,7 @@ def _build_selector_widget(
     model: object,
     parent: QtWidgets.QWidget,
 ) -> SelectorWidget | QtWidgets.QWidget:
-    if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
-        from oklab_colour_picker.widgets.hue_lightness_slice_disk import HueLightnessSliceDiskWidget
-
-        return HueLightnessSliceDiskWidget(model, parent)
-    if mode == SelectorMode.LIGHTNESS_SLICE:
-        from oklab_colour_picker.widgets.lightness_slice_disk import LightnessSliceDiskWidget
-
-        return LightnessSliceDiskWidget(model, parent)
-    return SelectorWidget(model, parent)
+    return _mode_spec(mode).widget_factory(model, parent)
 
 
 def _model_for_colour(mode: SelectorMode, oklab: Sequence[float]) -> object:
@@ -235,13 +295,11 @@ def _model_for_colour(mode: SelectorMode, oklab: Sequence[float]) -> object:
     lightness = float(np.clip(lightness, 0.0, 1.0))
     chroma = max(0.0, float(chroma))
     hue = float(hue % math.tau)
-    if mode == SelectorMode.LIGHTNESS_SLICE:
-        return LightnessSliceModel(lightness=lightness)
-    if mode == SelectorMode.HUE_LIGHTNESS_SLICE:
-        return HueLightnessSliceModel(chroma=chroma)
-    if mode == SelectorMode.LIGHTNESS_CHROMA_SLICE:
-        return LightnessChromaSliceModel(hue=hue)
-    raise AssertionError(f"unhandled selector mode: {mode!r}")
+    return _mode_spec(mode).model_factory(lightness, chroma, hue)
+
+
+def _mode_spec(mode: SelectorMode) -> ModeSpec:
+    return MODE_SPECS[mode]
 
 
 def _selected_or_default(oklab: Sequence[float] | None) -> np.ndarray:

@@ -222,15 +222,15 @@ def test_drag_past_gamut_leaf_snaps_to_cusp_at_cursor_hue(qtbot):
 
 
 def test_hover_outside_drag_does_not_snap(qtbot):
-    # Snapping is drag-only — _colour_at outside a drag still returns None
-    # past the leaf, so keyboard nav and other non-drag callers see strict
-    # in-gamut behaviour.
+    # Snapping is drag-only — strict in-gamut picking (color_at) outside a
+    # drag still returns None past the leaf, so keyboard nav and other
+    # non-drag callers see strict in-gamut behaviour.
     widget = LightnessSliceDiskWidget(LightnessSliceModel(lightness=0.5))
     widget.resize(101, 101)
     qtbot.addWidget(widget)
     widget.show()
 
-    assert widget._colour_at(QtCore.QPoint(99, 50)) is None
+    assert widget.color_at((99, 50)) is None
 
 
 def test_click_without_drag_on_out_of_gamut_does_not_snap(qtbot):

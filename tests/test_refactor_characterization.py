@@ -9,6 +9,7 @@ pytest.importorskip("PyQt5")
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import color_math
+from oklab_colour_picker.controller import ChangeKind
 from oklab_colour_picker.dock import ColourPickerDockPanel, SelectorMode
 from oklab_colour_picker.selector_models import (
     HueLightnessSliceModel,
@@ -196,14 +197,16 @@ def test_core_controller_krita_round_trip_suppresses_self_feedback():
     adapter = FakeAdapter()
     controller = ColourPickerController(adapter, scheduler=ImmediateTestScheduler())
     observed = []
-    controller.add_foreground_listener(observed.append)
+    controller.add_colour_listener(lambda colour, kind: observed.append((colour, kind)))
     committed = np.array([0.65, 0.04, -0.02])
 
     controller.request_foreground_commit(committed)
     adapter.foreground_colour = normalize_oklab_for_krita(committed)
 
     assert controller.sync_external_foreground() is False
-    assert observed == []
+    # The commit broadcasts COMMIT once; the self-feedback sync that follows
+    # must not produce an EXTERNAL echo (INV-3 at the controller boundary).
+    assert [kind for _colour, kind in observed] == [ChangeKind.COMMIT]
     np.testing.assert_allclose(controller.selected_colour, committed)
 
 
@@ -322,7 +325,6 @@ def test_edge_achromatic_hue_lightness_click_keeps_indicator_at_click(qtbot):
     assert active.indicator_position() == pytest.approx((float(click.x()), float(click.y())))
 
 
-@pytest.mark.xfail(strict=True, reason="PR-2 / §4.4 chroma=0: explicit transition log does not exist yet")
 def test_edge_achromatic_echo_has_no_pinned_idle_pinned_transition(qtbot):
     widget = _shown_selector(qtbot, HueLightnessSliceDiskWidget(HueLightnessSliceModel(chroma=0.0)), (121, 121))
     click = QtCore.QPoint(60, 20)
@@ -331,7 +333,14 @@ def test_edge_achromatic_echo_has_no_pinned_idle_pinned_transition(qtbot):
     _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, click, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
     widget.set_selected_colour(widget.selected_colour)
 
-    assert ("PINNED", "IDLE", "PINNED") not in widget.transition_log
+    # The achromatic echo must be swallowed by PINNED (INV-3/INV-4): no
+    # PINNED→IDLE→PINNED round-trip and the indicator stays at the click.
+    log = widget.transition_log
+    assert not any(
+        log[i : i + 3] == ("PINNED", "IDLE", "PINNED") for i in range(len(log) - 2)
+    )
+    assert widget.state == "PINNED"
+    assert widget.indicator_position() == pytest.approx((float(click.x()), float(click.y())))
 
 
 @pytest.mark.xfail(strict=True, reason="PR-3 / §3.6: ReadoutPanel edit latch is not implemented yet")
@@ -387,9 +396,10 @@ def _keyboard_start_point(widget, size):
         event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
         QtWidgets.QApplication.sendEvent(widget, event)
         if event.isAccepted():
-            # PR-2-fragile: this only cleans up the legacy pending-commit flag
-            # after probing for a keyboard-nudgeable point.
-            widget._keyboard_commit_pending = False
+            release = QtGui.QKeyEvent(QtCore.QEvent.KeyRelease, QtCore.Qt.Key_Right, QtCore.Qt.NoModifier)
+            QtWidgets.QApplication.sendEvent(widget, release)
+            widget.resize(widget.width() + 1, widget.height() + 1)
+            widget.resize(*size)
             widget.set_selected_colour(colour)
             return point
     raise AssertionError("could not find keyboard-nudgeable point")
@@ -434,23 +444,30 @@ class FakeController:
 
     def set_preview_colour(self, colour):
         self.previews.append(None if colour is None else np.asarray(colour, dtype=float).copy())
+        if colour is not None:
+            self._broadcast(colour, ChangeKind.PREVIEW)
 
     def request_foreground_commit(self, colour):
         self.commits.append(None if colour is None else np.asarray(colour, dtype=float).copy())
+        if colour is not None:
+            self._broadcast(colour, ChangeKind.COMMIT)
 
     def set_dock_visible(self, visible):
         self.visibility.append(bool(visible))
 
-    def add_foreground_listener(self, listener):
+    def add_colour_listener(self, listener):
         self._foreground_listeners.append(listener)
 
-    def remove_foreground_listener(self, listener):
+    def remove_colour_listener(self, listener):
         self._foreground_listeners.remove(listener)
 
-    def emit_foreground(self, colour):
+    def _broadcast(self, colour, kind):
         self._selected_colour = np.asarray(colour, dtype=float).copy()
         for listener in list(self._foreground_listeners):
-            listener(np.asarray(colour, dtype=float).copy())
+            listener(self._selected_colour.copy(), kind)
+
+    def emit_foreground(self, colour):
+        self._broadcast(colour, ChangeKind.EXTERNAL)
 
 
 class ImmediateTestScheduler:

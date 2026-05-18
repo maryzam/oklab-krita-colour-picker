@@ -15,6 +15,7 @@ KRITA_IMPORT_ALLOWED = {
 PURE_NO_QT_OR_KRITA = {
     Path("oklab_colour_picker/color_math.py"),
     Path("oklab_colour_picker/renderers.py"),
+    Path("oklab_colour_picker/selector_interaction.py"),
     Path("oklab_colour_picker/selector_models.py"),
     Path("oklab_colour_picker/models/__init__.py"),
     Path("oklab_colour_picker/models/base.py"),
@@ -30,6 +31,7 @@ SET_FOREGROUND_ALLOWED = {
 LOWER_LAYER_FILES = {
     Path("oklab_colour_picker/color_math.py"),
     Path("oklab_colour_picker/renderers.py"),
+    Path("oklab_colour_picker/selector_interaction.py"),
     Path("oklab_colour_picker/selector_models.py"),
     Path("oklab_colour_picker/models/__init__.py"),
     Path("oklab_colour_picker/models/base.py"),
@@ -43,6 +45,7 @@ LOWER_LAYER_TESTS = {
     "oklab_colour_picker.color_math": Path("tests/test_color_math.py"),
     "oklab_colour_picker.models": Path("tests/test_selector_models.py"),
     "oklab_colour_picker.renderers": Path("tests/test_renderers.py"),
+    "oklab_colour_picker.selector_interaction": Path("tests/test_selector_interaction.py"),
     "oklab_colour_picker.selector_models": Path("tests/test_selector_models.py"),
     "oklab_colour_picker.controller": Path("tests/test_controller.py"),
 }
@@ -192,6 +195,97 @@ def test_selector_widget_uses_explicit_model_contract():
     ]
 
     assert probes == []
+
+
+def test_selector_widget_keeps_no_absolute_pixel_indicator_memory():
+    """Anti-goal §7 / INV-1 tripwire: the deleted ``_last_interaction_position``
+    family must never come back; an anchor lives only inside an interaction
+    state, not as persistent absolute-pixel memory."""
+
+    source = (ROOT / "oklab_colour_picker" / "widgets" / "selector.py").read_text()
+    for forbidden in (
+        "_last_interaction_position",
+        "_record_interaction_position",
+        "_interaction_position_resolves_to",
+        "_interaction_indicator_position",
+    ):
+        assert forbidden not in source, forbidden
+
+
+def test_dock_does_not_echo_colour_back_into_views_on_intent():
+    """Anti-goal §7 / INV-3: the dock forwards intent to the controller only;
+    it must not push the colour straight back into the views (the echo loop)."""
+
+    path = ROOT / "oklab_colour_picker" / "dock.py"
+    tree = ast.parse(path.read_text(), filename=path.relative_to(ROOT).as_posix())
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in (
+            "_preview_colour",
+            "_commit_colour",
+        ):
+            continue
+        for call in ast.walk(node):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr in ("set_selected_colour", "_show_on_views", "show_colour")
+            ):
+                offenders.append(f"{node.name}: {call.func.attr}")
+
+    assert offenders == []
+
+
+def test_selector_widget_does_not_dispatch_on_interaction_state_names():
+    """State-pattern boundary: the Qt adapter must not branch on string state
+    names. It dispatches commands to the interaction facade and reacts only to
+    typed outcomes such as ``handled`` or ``rendered_broadcast``."""
+
+    path = ROOT / "oklab_colour_picker" / "widgets" / "selector.py"
+    source = path.read_text()
+    tree = ast.parse(source, filename=path.relative_to(ROOT).as_posix())
+
+    assert "_state.name" not in source
+    assert "state_from_name" not in source
+    assert "enter_state" not in source
+    offenders = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and node.value in {"IDLE", "DRAGGING", "KEYBOARD", "PINNED"}
+    ]
+    assert offenders == []
+
+
+def test_selector_broadcast_model_policy_uses_factory_result_not_state_probe():
+    path = ROOT / "oklab_colour_picker" / "widgets" / "selector.py"
+    source = path.read_text()
+
+    assert "model_thunk" not in source
+    assert "rendered_broadcast" in source
+    assert ".name ==" not in source
+
+
+def test_selector_interaction_has_no_string_state_factory():
+    source = (ROOT / "oklab_colour_picker" / "selector_interaction.py").read_text()
+
+    assert "state_from_name" not in source
+    assert "force_for_test" not in source
+
+
+def test_selector_interaction_dispatch_uses_command_objects():
+    source = (ROOT / "oklab_colour_picker" / "selector_interaction.py").read_text()
+
+    assert "_COMMAND_HANDLERS" not in source
+    assert "command.dispatch(self._state, ctx)" in source
+    assert "isinstance(command" not in source
+
+
+def test_dock_uses_explicit_colour_subscription():
+    source = (ROOT / "oklab_colour_picker" / "dock.py").read_text()
+
+    assert "ColourSubscription" in source
+    assert "self._colour_listener" not in source
 
 
 def _project_python_asts():
