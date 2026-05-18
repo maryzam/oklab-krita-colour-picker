@@ -227,6 +227,35 @@ def test_external_sync_does_not_refresh_failed_commit_snapshot_during_pending_in
     assert controller.selected_colour is None
 
 
+def test_forced_external_sync_handles_one_shot_foreground_switch_during_grace_window():
+    adapter = FakeKritaAdapter()
+    controller = ColourPickerController(adapter, scheduler=FakeScheduler())
+    preview = np.array([0.62, 0.02, -0.03])
+    switched_foreground = np.array([0.20, -0.04, 0.07])
+
+    controller.set_preview_colour(preview)
+    adapter.foreground_colour = switched_foreground
+
+    assert controller.sync_external_foreground() is False
+    assert controller.sync_external_foreground(force=True) is True
+    np.testing.assert_allclose(controller.selected_colour, switched_foreground)
+
+
+def test_forced_external_sync_does_not_interrupt_pending_commit():
+    scheduler = FakeScheduler()
+    adapter = FakeKritaAdapter()
+    controller = ColourPickerController(adapter, scheduler=scheduler)
+    pending = np.array([0.62, 0.02, -0.03])
+    switched_foreground = np.array([0.20, -0.04, 0.07])
+
+    controller.request_foreground_commit(pending)
+    adapter.foreground_colour = switched_foreground
+
+    assert controller.sync_external_foreground(force=True) is False
+    scheduler.run_pending()
+    np.testing.assert_allclose(controller.selected_colour, pending)
+
+
 def test_hidden_dock_stops_polling_and_visible_dock_restarts_it():
     timer = FakeRepeatingTimer()
     controller = ColourPickerController(FakeKritaAdapter(), scheduler=FakeScheduler(), foreground_timer=timer)

@@ -122,6 +122,23 @@ class HueLightnessSliceModel(SelectorModel):
             return None
         return color_math.oklch_to_oklab([lightness, self.chroma, hue])
 
+    def snapped_position_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> Position | None:
+        geometry = circle_geometry_projected(position, size)
+        if geometry is None:
+            return None
+
+        normalized_radius, hue = geometry
+        lightness = _snap_lightness_to_gamut(
+            self.chroma,
+            hue,
+            1.0 - normalized_radius,
+        )
+        if lightness is None:
+            return None
+        return position_from_circle(1.0 - lightness, hue, size)
+
     def indicator_for_color(
         self, oklab: Sequence[float], size: Sequence[float]
     ) -> IndicatorSpec | None:

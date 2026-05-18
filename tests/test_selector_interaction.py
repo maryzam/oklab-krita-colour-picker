@@ -48,7 +48,8 @@ class FakeCtx:
         x = point[0]
         if 0 <= x < self.WIDTH:
             return PickResult.exact(float(x))
-        return PickResult.snapped(float(min(self.WIDTH - 1, max(0, x))))
+        snapped_x = float(min(self.WIDTH - 1, max(0, x)))
+        return PickResult.snapped(snapped_x, (snapped_x, 0.0))
 
     def quantized_equal(self, a, b):
         return a is not None and b is not None and round(a) == round(b)
@@ -119,9 +120,11 @@ def test_drag_leaving_gamut_snaps_continuously_and_commits_snapped():
     ctx = FakeCtx()
     state = Idle().press(ctx, (3.0, 0.0)).state       # valid: last_valid set
     state = state.move(ctx, (99.0, 0.0)).state        # off-gamut -> snapped
+    assert state.anchor == (9.0, 0.0)
     assert None not in ctx.previews
     state = state.release(ctx, (99.0, 0.0)).state
     assert isinstance(state, Pinned)
+    assert state.anchor == (9.0, 0.0)
     assert ctx.commits == [9.0]                      # snapped to the rim
 
 

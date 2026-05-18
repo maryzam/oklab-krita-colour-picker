@@ -197,6 +197,39 @@ def test_click_on_achromatic_hue_lightness_slice_keeps_indicator_at_click(qtbot)
     assert indicator == pytest.approx((float(click.x()), float(click.y())))
 
 
+def test_real_controller_achromatic_hue_lightness_commit_keeps_emitter_pinned(qtbot):
+    from oklab_colour_picker.controller import ColourPickerController, normalize_oklab_for_krita
+
+    class NormalizingAdapter:
+        def __init__(self):
+            self.foreground = color_math.oklch_to_oklab([0.5, 0.0, 0.0])
+
+        def set_foreground(self, oklab):
+            self.foreground = normalize_oklab_for_krita(oklab)
+            return self.foreground.copy()
+
+        def get_foreground(self):
+            return self.foreground.copy()
+
+    class ImmediateScheduler:
+        def call_soon(self, callback):
+            callback()
+
+    controller = ColourPickerController(NormalizingAdapter(), scheduler=ImmediateScheduler())
+    panel = ColourPickerDockPanel(controller)
+    qtbot.addWidget(panel)
+    panel.set_mode(SelectorMode.HUE_LIGHTNESS_SLICE)
+    active = panel.active_selector
+    active.resize(121, 121)
+
+    click = QtCore.QPoint(60, 20)
+    _send_mouse(active, QtCore.QEvent.MouseButtonPress, click, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(active, QtCore.QEvent.MouseButtonRelease, click, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    assert active.state == "PINNED"
+    assert active.indicator_position() == pytest.approx((float(click.x()), float(click.y())))
+
+
 def test_preview_reuses_equal_selector_models(qtbot):
     controller = FakeController()
     panel = ColourPickerDockPanel(controller)
@@ -542,6 +575,7 @@ def test_created_krita_dock_syncs_foreground_on_canvas_change(qtbot):
     dock.canvasChanged(object())
 
     assert controller.sync_count == sync_count + 1
+    assert controller.last_force_sync is True
 
 
 def test_dock_shows_friendly_message_when_numpy_is_missing(qtbot, monkeypatch):
@@ -690,6 +724,18 @@ def test_package_exports_register_plugin():
     assert oklab_colour_picker.register_plugin is register_plugin
 
 
+def _send_mouse(widget, event_type, point, button, buttons):
+    event = QtGui.QMouseEvent(
+        event_type,
+        point,
+        button,
+        buttons,
+        QtCore.Qt.NoModifier,
+    )
+    QtCore.QCoreApplication.sendEvent(widget, event)
+    return event
+
+
 class FakeController:
     def __init__(self, selected_colour=None):
         self.previews = []
@@ -716,8 +762,9 @@ class FakeController:
     def set_dock_visible(self, visible):
         self.visibility.append(bool(visible))
 
-    def sync_external_foreground(self):
+    def sync_external_foreground(self, *, force=False):
         self.sync_count += 1
+        self.last_force_sync = bool(force)
         return False
 
     def add_colour_listener(self, listener):

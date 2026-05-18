@@ -9,7 +9,11 @@ pytest.importorskip("PyQt5")
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from oklab_colour_picker import color_math
-from oklab_colour_picker.selector_models import LightnessChromaSliceModel, LightnessSliceModel
+from oklab_colour_picker.selector_models import (
+    HueLightnessSliceModel,
+    LightnessChromaSliceModel,
+    LightnessSliceModel,
+)
 from oklab_colour_picker.widgets import SelectorWidget
 
 
@@ -129,6 +133,9 @@ def test_hue_chroma_drag_outside_snaps_to_cursor_boundary(qtbot):
     assert len(previews) == 3
     assert not any(preview is None for preview in previews)
     assert len(commits) == 1
+    expected_position = widget.model.position_for_color(expected, _size(widget))
+    assert expected_position is not None
+    assert widget.indicator_position() == pytest.approx(expected_position, abs=1.0)
     np.testing.assert_allclose(commits[0], expected)
     np.testing.assert_allclose(widget.selected_colour, expected)
 
@@ -163,8 +170,33 @@ def test_lightness_chroma_drag_outside_snaps_to_cursor_boundary(qtbot):
     # Invalid movement after a valid hit snaps to the gamut boundary.
     assert len(previews) == 3
     assert not any(preview is None for preview in previews)
+    expected_position = widget.model.position_for_color(expected, _size(widget))
+    assert expected_position is not None
+    assert widget.indicator_position() == pytest.approx(expected_position, abs=1.0)
     assert len(commits) == 1
     np.testing.assert_allclose(commits[0], expected)
+    np.testing.assert_allclose(widget.selected_colour, expected)
+
+
+def test_achromatic_hue_lightness_drag_outside_keeps_cursor_hue_anchor(qtbot):
+    widget = SelectorWidget(HueLightnessSliceModel(chroma=0.0))
+    widget.resize(101, 101)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    start = QtCore.QPoint(50, 20)
+    outside = QtCore.QPoint(50, -20)
+    expected = widget.model.snapped_color_at_position((outside.x(), outside.y()), _size(widget))
+    expected_position = widget.model.snapped_position_at_position((outside.x(), outside.y()), _size(widget))
+    assert expected is not None
+    assert expected_position is not None
+
+    _send_mouse(widget, QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseMove, outside, QtCore.Qt.NoButton, QtCore.Qt.LeftButton)
+    _send_mouse(widget, QtCore.QEvent.MouseButtonRelease, outside, QtCore.Qt.LeftButton, QtCore.Qt.NoButton)
+
+    assert widget.state == "PINNED"
+    assert widget.indicator_position() == pytest.approx(expected_position, abs=1.0)
     np.testing.assert_allclose(widget.selected_colour, expected)
 
 

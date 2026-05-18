@@ -172,10 +172,10 @@ class ColourPickerController:
         self._commit_scheduled = True
         self._scheduler.call_soon(self._flush_pending_commit)
 
-    def sync_external_foreground(self) -> bool:
+    def sync_external_foreground(self, *, force: bool = False) -> bool:
         if not self._dock_visible:
             return False
-        if self._local_interaction_blocks_external_sync():
+        if self._local_interaction_blocks_external_sync(force=force):
             return False
 
         foreground = self._adapter.get_foreground()
@@ -259,9 +259,12 @@ class ColourPickerController:
     def _extend_local_interaction_guard(self) -> None:
         self._local_interaction_deadline = self._clock() + LOCAL_INTERACTION_SYNC_GRACE_SECONDS
 
-    def _local_interaction_blocks_external_sync(self) -> bool:
+    def _local_interaction_blocks_external_sync(self, *, force: bool = False) -> bool:
         if self._pending_commit is not None or self._commit_scheduled:
             return True
+        if force:
+            self._local_interaction_deadline = None
+            return False
         if self._local_interaction_deadline is None:
             return False
         if self._clock() < self._local_interaction_deadline:

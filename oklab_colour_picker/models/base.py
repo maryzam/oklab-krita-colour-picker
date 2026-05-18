@@ -57,6 +57,14 @@ class SelectorModel(ABC):
 
         return None
 
+    def snapped_position_at_position(
+        self, position: Sequence[float], size: Sequence[float]
+    ) -> Position | None:
+        snapped = self.snapped_color_at_position(position, size)
+        if snapped is None:
+            return None
+        return self.position_for_color(snapped, size)
+
     def indicator_for_color(
         self, oklab: Sequence[float], size: Sequence[float]
     ) -> IndicatorSpec | None:

@@ -43,6 +43,7 @@ class ExactPick:
 @dataclass(frozen=True, slots=True)
 class SnappedPick:
     colour: object
+    position: Position
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,8 +62,8 @@ class PickResult:
         return ExactPick(colour)
 
     @staticmethod
-    def snapped(colour: object) -> Pick:
-        return SnappedPick(colour)
+    def snapped(colour: object, position: Position) -> Pick:
+        return SnappedPick(colour, position)
 
     @staticmethod
     def invalid() -> Pick:
@@ -284,11 +285,15 @@ class Dragging(_Anchored):
 
     def release(self, ctx: Ctx, point: Point) -> InteractionResult:
         picked = ctx.pick(point)
-        colour = _drag_colour(picked, has_last_valid=self._last_valid is not None)
-        if colour is not None:
-            ctx.set_colour(colour)
-            ctx.commit(colour)
-            return InteractionResult(Pinned(colour, _position(point)))
+        selection = _drag_selection(
+            picked,
+            point,
+            has_last_valid=self._last_valid is not None,
+        )
+        if selection is not None:
+            ctx.set_colour(selection.colour)
+            ctx.commit(selection.colour)
+            return InteractionResult(Pinned(selection.colour, selection.position))
         if self._last_valid is not None:
             ctx.set_colour(self._last_valid)
             ctx.commit(self._last_valid)
@@ -299,12 +304,16 @@ class Dragging(_Anchored):
 
     def _pick(self, ctx: Ctx, point: Point) -> InteractionResult:
         picked = ctx.pick(point)
-        colour = _drag_colour(picked, has_last_valid=self._last_valid is not None)
-        if colour is not None:
-            ctx.set_colour(colour)
-            ctx.preview(colour)
+        selection = _drag_selection(
+            picked,
+            point,
+            has_last_valid=self._last_valid is not None,
+        )
+        if selection is not None:
+            ctx.set_colour(selection.colour)
+            ctx.preview(selection.colour)
             return InteractionResult(
-                Dragging(_position(point), self._before, colour)
+                Dragging(selection.position, self._before, selection.colour)
             )
         if self._last_valid is not None:
             return InteractionResult(self)
@@ -411,12 +420,23 @@ class SelectorInteraction:
         self._state = state
 
 
-def _drag_colour(picked: Pick, *, has_last_valid: bool) -> object | None:
+@dataclass(frozen=True, slots=True)
+class DragSelection:
+    colour: object
+    position: Position
+
+
+def _drag_selection(
+    picked: Pick,
+    point: Point,
+    *,
+    has_last_valid: bool,
+) -> DragSelection | None:
     match picked:
         case ExactPick(colour=colour):
-            return colour
-        case SnappedPick(colour=colour) if has_last_valid:
-            return colour
+            return DragSelection(colour, _position(point))
+        case SnappedPick(colour=colour, position=position) if has_last_valid:
+            return DragSelection(colour, position)
         case InvalidPick() | SnappedPick():
             # Snapping starts only after a drag has first owned a valid colour;
             # an off-gamut press stays cancellable and restores the prior state.
